@@ -18,6 +18,7 @@ function createDefaultState(): GanttState {
         name: 'My Project',
         color: '#6366f1',
         description: '',
+        order: 0,
       },
     },
     milestones: {},
