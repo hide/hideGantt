@@ -13,12 +13,13 @@ export function generateShareUrl(state: GanttState): string {
     timelineEndDate: state.timelineEndDate,
   };
   const compressed = compressToEncodedURIComponent(JSON.stringify(shareData));
-  return `${window.location.origin}${window.location.pathname}?share=${compressed}`;
+  return `${window.location.origin}${window.location.pathname}#share=${compressed}`;
 }
 
 export function parseShareUrl(): Partial<GanttState> | null {
-  const params = new URLSearchParams(window.location.search);
-  const shareData = params.get('share');
+  const hash = window.location.hash;
+  if (!hash.startsWith('#share=')) return null;
+  const shareData = hash.slice('#share='.length);
   if (!shareData) return null;
 
   try {
@@ -32,5 +33,5 @@ export function parseShareUrl(): Partial<GanttState> | null {
 }
 
 export function isReadOnlyMode(): boolean {
-  return new URLSearchParams(window.location.search).has('share');
+  return window.location.hash.startsWith('#share=');
 }
