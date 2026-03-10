@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-surface-900: #0c0e14;
+  --color-surface-800: #12151e;
+  --color-surface-700: #1a1e2e;
+  --color-surface-600: #242940;
+  --color-surface-500: #2e3552;
+  --color-surface-400: #4a5280;
+  --color-surface-300: #6b74a8;
+  --color-surface-200: #9ba3cc;
+  --color-surface-100: #c8cde6;
+  --color-accent: #7c6aef;
+  --color-accent-light: #9d8ff5;
+  --color-accent-glow: rgba(124, 106, 239, 0.3);
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-bg500) transparent;
+}
+
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--theme-bg500); border-radius: 3px; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--theme-bg900);
+  color: var(--theme-text100);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+input, select, textarea {
+  background: var(--theme-bg700);
+  border: 1px solid var(--theme-bg500);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--theme-text100);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+  font-family: inherit;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--theme-accent);
+  box-shadow: 0 0 0 2px var(--theme-accentGlow);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-in { animation: slideIn 0.25s ease-out; }
+.fade-in { animation: fadeIn 0.2s ease-out; }
+
+.milestone-diamond {
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}
