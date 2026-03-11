@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx-js-style';
 import type { GanttState, Task, TaskStatus } from './types';
-import { getTaskStatus } from './types';
+import { getTaskStatus, computeProgress } from './types';
 import { generateShareUrl } from './sharing';
 import type { Lang } from './i18n';
 import { t } from './i18n';
@@ -74,10 +74,10 @@ function groupTasks(state: GanttState, groupBy: GroupBy): GroupedTasks[] {
     case 'people': {
       const sorted = Object.values(state.people).sort((a, b) => a.order - b.order);
       for (const person of sorted) {
-        const tasks = allTasks.filter((t) =>
-          t.assigneeIds.includes(person.id) ||
-          t.subtasks?.some((s) => s.assigneeIds?.includes(person.id))
-        );
+        const hasAssignee = (task: Task): boolean =>
+          task.assigneeIds.includes(person.id) ||
+          task.children.some((cid) => { const c = state.tasks[cid]; return c ? hasAssignee(c) : false; });
+        const tasks = allTasks.filter((t) => !t.parentId && hasAssignee(t));
         if (tasks.length > 0)
           groups.push({ label: person.name, color: person.color, tasks });
       }
@@ -201,35 +201,32 @@ export function exportPDF(state: GanttState, lang: Lang): void {
         <th>${gb === 'projects' ? t('detail.milestone' as any, lang) : gb === 'people' ? t('detail.projects' as any, lang) : t('detail.assignees' as any, lang)}</th>
       </tr></thead><tbody>`;
 
-      for (const task of group.tasks) {
-        const status = getTaskStatus(task);
+      const renderTaskRow = (task: Task, depth: number) => {
+        const progress = computeProgress(task, state.tasks);
+        const status = getTaskStatus(task, state.tasks);
         const sc = STATUS_COLORS[status];
         const extra = gb === 'projects'
           ? milestoneName(state, task.milestoneId)
           : gb === 'people'
             ? projectNames(state, task.projectIds)
             : personNames(state, task.assigneeIds);
-        html += `<tr>
-          <td><strong>${esc(task.title)}</strong></td>
+        const indent = depth > 0 ? `padding-left:${depth * 16}px;color:#555` : '';
+        html += `<tr${depth > 0 ? ' class="subtask-row"' : ''}>
+          <td style="${indent}"><strong>${esc(task.title)}</strong></td>
           <td><span class="status-badge" style="background:${sc}">${statusSymbol(status)} ${statusLabel(status, lang)}</span></td>
-          <td><div class="progress-bar"><div class="progress-fill" style="width:${task.progress}%;background:${sc}"></div></div> ${task.progress}%</td>
+          <td><div class="progress-bar"><div class="progress-fill" style="width:${progress}%;background:${sc}"></div></div> ${progress}%</td>
           <td>${fmtDate(task.startDate)}</td>
           <td>${fmtDate(task.endDate)}</td>
           <td>${esc(personNames(state, task.assigneeIds))}</td>
           <td>${esc(extra)}</td>
         </tr>`;
-        for (const sub of task.subtasks || []) {
-          html += `<tr class="subtask-row">
-            <td>${sub.done ? '\u2714' : '\u25cb'} ${esc(sub.title)}</td>
-            <td>${sub.done ? `<span class="status-badge" style="background:#9ca3af">${statusLabel('completed', lang)}</span>` : ''}</td>
-            <td>${sub.done ? '100%' : '0%'}</td>
-            <td>${fmtDate(sub.startDate || '')}</td>
-            <td>${fmtDate(sub.endDate || '')}</td>
-            <td>${esc(personNames(state, sub.assigneeIds || []))}</td>
-            <td></td>
-          </tr>`;
+        // Render children recursively
+        for (const childId of task.children) {
+          const child = state.tasks[childId];
+          if (child) renderTaskRow(child, depth + 1);
         }
-      }
+      };
+      for (const task of group.tasks) renderTaskRow(task, 0);
       html += `</tbody></table>`;
 
       // Mini Gantt chart
@@ -383,40 +380,32 @@ export function exportExcel(state: GanttState, lang: Lang): void {
       ]);
       rowMetas.push({ row: headerRow, type: 'header' });
 
-      for (const task of group.tasks) {
-        const status = getTaskStatus(task);
+      const addExcelTaskRow = (task: Task, depth: number) => {
+        const progress = computeProgress(task, state.tasks);
+        const status = getTaskStatus(task, state.tasks);
         const extra = gb === 'projects'
           ? milestoneName(state, task.milestoneId)
           : gb === 'people'
             ? projectNames(state, task.projectIds)
             : personNames(state, task.assigneeIds);
         const taskRow = data.length;
+        const prefix = '  '.repeat(depth);
         data.push([
-          task.title,
+          `${prefix}${task.title}`,
           `${statusSymbol(status)} ${statusLabel(status, lang)}`,
-          task.progress,
+          progress,
           task.startDate,
           task.endDate,
           personNames(state, task.assigneeIds),
           extra,
         ]);
-        rowMetas.push({ row: taskRow, type: 'task', status });
-
-        for (const sub of task.subtasks || []) {
-          const subRow = data.length;
-          const subDone = sub.done;
-          data.push([
-            `  ${subDone ? '\u2714' : '\u25cb'} ${sub.title}`,
-            subDone ? statusLabel('completed', lang) : '',
-            subDone ? 100 : 0,
-            sub.startDate || '',
-            sub.endDate || '',
-            personNames(state, sub.assigneeIds || []),
-            '',
-          ]);
-          rowMetas.push({ row: subRow, type: 'subtask', status: subDone ? 'completed' : undefined });
+        rowMetas.push({ row: taskRow, type: depth > 0 ? 'subtask' : 'task', status });
+        for (const childId of task.children) {
+          const child = state.tasks[childId];
+          if (child) addExcelTaskRow(child, depth + 1);
         }
-      }
+      };
+      for (const task of group.tasks) addExcelTaskRow(task, 0);
 
       // Gantt timeline for this group
       const { minDate, totalDays } = computeTimeline([group]);

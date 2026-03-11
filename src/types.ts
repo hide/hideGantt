@@ -13,14 +13,7 @@ export interface Category {
   order: number;
 }
 
-export interface Subtask {
-  id: string;
-  title: string;
-  done: boolean;
-  startDate?: string;
-  endDate?: string;
-  assigneeIds?: string[];
-}
+export const MAX_TASK_DEPTH = 2; // 0=task, 1=subtask, 2=sub-subtask
 
 export interface Task {
   id: string;
@@ -28,8 +21,7 @@ export interface Task {
   description: string;
   startDate: string; // ISO date string
   endDate: string;
-  progress: number; // 0-100, auto-computed from subtasks
-  subtasks: Subtask[];
+  progress: number; // 0-100, leaf: manual, parent: auto-computed from children
   assigneeIds: string[];
   categoryIds: string[];
   projectIds: string[];
@@ -79,43 +71,30 @@ export interface GanttState {
   editingItemType: SidebarSection | null;
 }
 
-/** Compute progress from subtasks: no subtasks = 0% */
-export function computeProgress(task: Task): number {
-  if (!task.subtasks || task.subtasks.length === 0) return 0;
-  const done = task.subtasks.filter((s) => s.done).length;
-  return Math.round((done / task.subtasks.length) * 100);
+/** Compute progress recursively: leaf tasks use stored progress, parent tasks average children */
+export function computeProgress(task: Task, allTasks: Record<string, Task>): number {
+  const children = task.children.map((id) => allTasks[id]).filter(Boolean);
+  if (children.length === 0) return task.progress; // leaf: manual value
+  const sum = children.reduce((acc, child) => acc + computeProgress(child, allTasks), 0);
+  return Math.round(sum / children.length);
 }
 
 export type TaskStatus = 'on-track' | 'at-risk' | 'behind' | 'completed';
 
-export function getTaskStatus(task: Task): TaskStatus {
-  if (task.progress >= 100) return 'completed';
+export function getTaskStatus(task: Task, allTasks?: Record<string, Task>): TaskStatus {
+  const progress = allTasks ? computeProgress(task, allTasks) : task.progress;
+  if (progress >= 100) return 'completed';
   const now = new Date();
   const end = new Date(task.endDate);
   const start = new Date(task.startDate);
   const totalDuration = end.getTime() - start.getTime();
   if (totalDuration <= 0) return 'on-track';
   const elapsed = now.getTime() - start.getTime();
-  const expectedProgress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-  const diff = expectedProgress - task.progress;
-  if (diff > 25) return 'behind';
-  if (diff > 10) return 'at-risk';
-  return 'on-track';
-}
-
-export function getSubtaskStatus(subtask: Subtask): TaskStatus {
-  if (subtask.done) return 'completed';
-  if (!subtask.startDate || !subtask.endDate) return 'on-track';
-  const now = new Date();
-  const start = new Date(subtask.startDate);
-  const end = new Date(subtask.endDate);
-  const totalDuration = end.getTime() - start.getTime();
-  if (totalDuration <= 0) return 'on-track';
-  const elapsed = now.getTime() - start.getTime();
   if (elapsed <= 0) return 'on-track';
   const expectedProgress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
-  if (expectedProgress > 25) return 'behind';
-  if (expectedProgress > 10) return 'at-risk';
+  const diff = expectedProgress - progress;
+  if (diff > 25) return 'behind';
+  if (diff > 10) return 'at-risk';
   return 'on-track';
 }
 

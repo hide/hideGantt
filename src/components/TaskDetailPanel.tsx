@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import type { GanttState, Task } from '../types';
-import { getTaskStatus, getStatusColor } from '../types';
-import { updateTask, deleteTask } from '../store';
+import { getTaskStatus, getStatusColor, computeProgress } from '../types';
+import { updateTask, deleteTask, createTask, canAddChild } from '../store';
 import { useTheme } from '../ThemeContext';
 import { useT } from '../LangContext';
 
@@ -20,7 +19,8 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
   const task = state.tasks[taskId];
   if (!task) return null;
 
-  const status = getTaskStatus(task);
+  const taskProgress = computeProgress(task, state.tasks);
+  const status = getTaskStatus(task, state.tasks);
   const statusColor = getStatusColor(status);
 
   const update = (updates: Partial<Task>) => {
@@ -32,6 +32,7 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
   };
 
   const allTasks = Object.values(state.tasks).filter((t) => t.id !== taskId);
+  const isLeaf = task.children.length === 0;
 
   const labelStyle = { color: theme.text400 };
 
@@ -81,16 +82,28 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
           </div>
         </div>
 
-        {/* Progress (auto-computed) */}
+        {/* Progress */}
         <div>
-          <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={labelStyle}>{t('detail.progress')}: {task.progress}%</label>
+          <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={labelStyle}>{t('detail.progress')}: {taskProgress}%</label>
           <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: theme.bg600 }}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${task.progress}%`, background: statusColor }} />
+            <div className="h-full rounded-full transition-all" style={{ width: `${taskProgress}%`, background: statusColor }} />
           </div>
+          {/* Leaf tasks: toggle done */}
+          {isLeaf && !readOnly && (
+            <label className="flex items-center gap-2 mt-2 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={task.progress >= 100}
+                onChange={() => update({ progress: task.progress >= 100 ? 0 : 100 })}
+                style={{ accentColor: theme.accent }}
+              />
+              <span style={{ color: theme.text200 }}>{t('detail.markDone' as any)}</span>
+            </label>
+          )}
         </div>
 
-        {/* Subtasks */}
-        <SubtaskList task={task} update={update} readOnly={readOnly} state={state} />
+        {/* Child Tasks */}
+        <ChildTaskList task={task} state={state} setState={setState} readOnly={readOnly} />
 
         {/* Projects */}
         <div>
@@ -183,7 +196,7 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
             </div>
           ) : (
             <div className="space-y-1 max-h-40 overflow-y-auto">
-              {allTasks.map((depTask) => {
+              {allTasks.filter((t) => t.id !== taskId && t.parentId !== taskId).map((depTask) => {
                 const isDep = task.dependencyIds.includes(depTask.id);
                 return (
                   <label key={depTask.id} className="flex items-center gap-2 text-xs cursor-pointer">
@@ -214,62 +227,83 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
   );
 }
 
-function SubtaskList({ task, update, readOnly, state }: { task: Task; update: (u: Partial<Task>) => void; readOnly: boolean; state: GanttState }) {
+function ChildTaskList({ task, state, setState, readOnly }: { task: Task; state: GanttState; setState: (s: GanttState) => void; readOnly: boolean }) {
   const theme = useTheme();
   const t = useT();
   const [newTitle, setNewTitle] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const subtasks = task.subtasks ?? [];
-  const people = Object.values(state.people);
 
-  const addSubtask = () => {
+  const children = task.children
+    .map((id) => state.tasks[id])
+    .filter(Boolean)
+    .sort((a, b) => a.order - b.order);
+
+  const canAdd = canAddChild(state, task.id);
+  const doneCount = children.filter((c) => computeProgress(c, state.tasks) >= 100).length;
+
+  const addChild = () => {
     if (!newTitle.trim()) return;
-    update({ subtasks: [...subtasks, { id: uuidv4(), title: newTitle.trim(), done: false, startDate: task.startDate, endDate: task.endDate, assigneeIds: [] }] });
+    setState(createTask(state, {
+      title: newTitle.trim(),
+      parentId: task.id,
+      startDate: task.startDate,
+      endDate: task.endDate,
+      projectIds: [...task.projectIds],
+    }));
     setNewTitle('');
   };
 
-  const updateSubtask = (id: string, patch: Partial<import('../types').Subtask>) => {
-    update({ subtasks: subtasks.map((s) => s.id === id ? { ...s, ...patch } : s) });
+  const toggleDone = (childId: string) => {
+    const child = state.tasks[childId];
+    if (!child || child.children.length > 0) return; // only toggle leaf tasks
+    const newProgress = child.progress >= 100 ? 0 : 100;
+    setState(updateTask(state, childId, { progress: newProgress }));
   };
 
-  const toggleDone = (id: string) => updateSubtask(id, { done: !subtasks.find((s) => s.id === id)?.done });
-
-  const removeSubtask = (id: string) => {
-    update({ subtasks: subtasks.filter((s) => s.id !== id) });
-    if (expandedId === id) setExpandedId(null);
+  const removeChild = (childId: string) => {
+    setState(deleteTask(state, childId));
   };
-
-  const doneCount = subtasks.filter((s) => s.done).length;
 
   return (
     <div>
       <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: theme.text400 }}>
-        {t('detail.subtasks' as any)} ({doneCount}/{subtasks.length})
+        {t('detail.subtasks' as any)} ({doneCount}/{children.length})
       </label>
       <div className="space-y-1 max-h-[400px] overflow-y-auto">
-        {subtasks.map((s) => {
-          const isOpen = expandedId === s.id;
-          const assigneeIds = s.assigneeIds ?? [];
+        {children.map((child) => {
+          const childProgress = computeProgress(child, state.tasks);
+          const childStatus = getTaskStatus(child, state.tasks);
+          const childStatusColor = getStatusColor(childStatus);
+          const isLeaf = child.children.length === 0;
+          const isDone = childProgress >= 100;
+
           return (
-            <div key={s.id} className="rounded group" style={{ background: theme.bg700 }}>
+            <div key={child.id} className="rounded group" style={{ background: theme.bg700 }}>
               <div className="flex items-center gap-2 py-1 px-1">
-                <input
-                  type="checkbox"
-                  checked={s.done}
-                  onChange={() => !readOnly && toggleDone(s.id)}
-                  style={{ accentColor: theme.accent }}
-                  disabled={readOnly}
-                />
+                {isLeaf && (
+                  <input
+                    type="checkbox"
+                    checked={isDone}
+                    onChange={() => !readOnly && toggleDone(child.id)}
+                    style={{ accentColor: theme.accent }}
+                    disabled={readOnly}
+                  />
+                )}
+                {!isLeaf && (
+                  <div className="w-4 h-4 flex items-center justify-center text-[8px]" style={{ color: childStatusColor }}>
+                    ▼
+                  </div>
+                )}
                 <span
                   className="text-sm flex-1 truncate cursor-pointer"
-                  style={{ color: s.done ? theme.text400 : theme.text100, textDecoration: s.done ? 'line-through' : 'none' }}
-                  onClick={() => setExpandedId(isOpen ? null : s.id)}
+                  style={{ color: isDone ? theme.text400 : childStatusColor, textDecoration: isDone ? 'line-through' : 'none' }}
+                  onClick={() => setState({ ...state, selectedTaskId: child.id })}
                 >
-                  {s.title}
+                  {child.title}
                 </span>
-                {assigneeIds.length > 0 && (
+                <span className="text-[10px] font-medium shrink-0" style={{ color: childStatusColor }}>{childProgress}%</span>
+                {child.assigneeIds.length > 0 && (
                   <div className="flex -space-x-1 shrink-0">
-                    {assigneeIds.slice(0, 2).map((aid) => {
+                    {child.assigneeIds.slice(0, 2).map((aid) => {
                       const person = state.people[aid];
                       if (!person) return null;
                       return <div key={aid} className="w-4 h-4 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ background: person.color, border: `1px solid ${theme.bg700}` }}>{person.avatar}</div>;
@@ -278,7 +312,7 @@ function SubtaskList({ task, update, readOnly, state }: { task: Task; update: (u
                 )}
                 {!readOnly && (
                   <button
-                    onClick={() => removeSubtask(s.id)}
+                    onClick={() => removeChild(child.id)}
                     className="text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
                     style={{ color: theme.danger }}
                   >
@@ -286,53 +320,20 @@ function SubtaskList({ task, update, readOnly, state }: { task: Task; update: (u
                   </button>
                 )}
               </div>
-              {isOpen && !readOnly && (
-                <div className="px-2 pb-2 pt-1 space-y-2" style={{ borderTop: `1px solid ${theme.bg600}` }}>
-                  {/* Dates */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[9px] uppercase tracking-wider block mb-0.5" style={{ color: theme.text400 }}>{t('detail.startDate')}</label>
-                      <input type="date" value={s.startDate ?? ''} onChange={(e) => updateSubtask(s.id, { startDate: e.target.value })} className="w-full text-[11px]" />
-                    </div>
-                    <div>
-                      <label className="text-[9px] uppercase tracking-wider block mb-0.5" style={{ color: theme.text400 }}>{t('detail.endDate')}</label>
-                      <input type="date" value={s.endDate ?? ''} onChange={(e) => updateSubtask(s.id, { endDate: e.target.value })} className="w-full text-[11px]" />
-                    </div>
-                  </div>
-                  {/* Assignees */}
-                  <div>
-                    <label className="text-[9px] uppercase tracking-wider block mb-0.5" style={{ color: theme.text400 }}>{t('detail.assignees')}</label>
-                    <div className="flex flex-wrap gap-1">
-                      {people.map((p) => {
-                        const isAssigned = assigneeIds.includes(p.id);
-                        return (
-                          <button key={p.id}
-                            onClick={() => updateSubtask(s.id, { assigneeIds: isAssigned ? assigneeIds.filter((id) => id !== p.id) : [...assigneeIds, p.id] })}
-                            className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium transition-all"
-                            style={isAssigned ? { background: p.color, color: '#fff' } : { background: theme.bg600, color: theme.text400 }}
-                          >
-                            <span className="text-[8px]">{p.avatar}</span>{p.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           );
         })}
       </div>
-      {!readOnly && (
+      {!readOnly && canAdd && (
         <div className="flex gap-1 mt-2">
           <input
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             placeholder={t('detail.addSubtask' as any)}
             className="flex-1 text-xs min-w-0"
-            onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && addSubtask()}
+            onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && addChild()}
           />
-          <button onClick={addSubtask} className="px-2 py-1 rounded text-xs font-medium" style={{ background: theme.accent + '30', color: theme.accent }}>+</button>
+          <button onClick={addChild} className="px-2 py-1 rounded text-xs font-medium" style={{ background: theme.accent + '30', color: theme.accent }}>+</button>
         </div>
       )}
     </div>

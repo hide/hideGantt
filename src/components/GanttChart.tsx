@@ -1,17 +1,15 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import { v4 as uuidv4 } from 'uuid';
-import type { GanttState, Task, Subtask } from '../types';
-import { getTaskStatus, getSubtaskStatus, getStatusColor } from '../types';
+import type { GanttState, Task } from '../types';
+import { getTaskStatus, getStatusColor, computeProgress } from '../types';
 import type { SidebarSection } from '../types';
-import { getFlattenedTasks, getTaskDepth, updateTask, createTask, createProject, createPerson, createCategory, createMilestone } from '../store';
+import { getFlattenedTasks, getTaskDepth, canAddChild, hasDescendantWithAssignee, updateTask, createTask, createProject, createPerson, createCategory, createMilestone } from '../store';
 import { useTheme } from '../ThemeContext';
 import { useT } from '../LangContext';
 
-/** A row in the Gantt chart — group header, task, or subtask */
+/** A row in the Gantt chart — group header or task */
 type GanttRow =
   | { kind: 'group'; id: string; label: string; color: string }
-  | { kind: 'task'; task: Task; depth: number }
-  | { kind: 'subtask'; subtask: Subtask; parentTask: Task; depth: number };
+  | { kind: 'task'; task: Task; depth: number };
 
 interface GanttChartProps {
   state: GanttState;
@@ -42,60 +40,61 @@ function generateDateHeaders(start: string, end: string, zoom: 'day' | 'week' | 
   const startDate = new Date(start);
   const endDate = new Date(end);
 
-  if (zoom === 'day' || zoom === 'week') {
-    let current = new Date(startDate);
-    let currentMonth = '';
-    let monthGroup: typeof headers[0] | null = null;
+  if (zoom === 'month') {
+    const d = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+    while (d <= endDate) {
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      const monthStart = new Date(year, month, 1);
+      const monthEnd = new Date(year, month + 1, 0);
+      const subLabels: { label: string; width: number; dayOffset: number }[] = [];
 
-    while (current <= endDate) {
-      const monthLabel = current.toLocaleDateString('ja', { month: 'short', year: 'numeric' });
-      if (monthLabel !== currentMonth) {
-        if (monthGroup) headers.push(monthGroup);
-        monthGroup = { label: monthLabel, subLabels: [] };
-        currentMonth = monthLabel;
+      for (let week = new Date(Math.max(monthStart.getTime(), startDate.getTime())); week <= monthEnd && week <= endDate;) {
+        const weekStart = new Date(week);
+        const weekEnd = new Date(Math.min(
+          new Date(weekStart.getTime() + 6 * 86400000).getTime(),
+          monthEnd.getTime(),
+          endDate.getTime()
+        ));
+        const days = Math.floor((weekEnd.getTime() - weekStart.getTime()) / 86400000) + 1;
+        subLabels.push({ label: `${weekStart.getDate()}`, width: days * dayWidth, dayOffset: dateToDayOffset(weekStart.toISOString().split('T')[0], start) });
+        week.setDate(week.getDate() + days);
       }
-
-      if (zoom === 'day') {
-        const dayOffset = dateToDayOffset(current.toISOString().split('T')[0], start);
-        monthGroup!.subLabels.push({ label: current.getDate().toString(), width: dayWidth, dayOffset });
-        current.setDate(current.getDate() + 1);
-      } else {
-        const weekStart = new Date(current);
-        const dayOffset = dateToDayOffset(weekStart.toISOString().split('T')[0], start);
-        const daysInWeek = Math.min(7, Math.ceil((endDate.getTime() - current.getTime()) / (1000 * 60 * 60 * 24)) + 1);
-        monthGroup!.subLabels.push({ label: `${weekStart.getDate()}`, width: daysInWeek * dayWidth, dayOffset });
-        current.setDate(current.getDate() + 7);
-      }
+      if (subLabels.length > 0) headers.push({ label: `${year}/${month + 1}`, subLabels });
+      d.setMonth(d.getMonth() + 1);
     }
-    if (monthGroup) headers.push(monthGroup);
+  } else if (zoom === 'week') {
+    const d = new Date(startDate);
+    d.setDate(d.getDate() - d.getDay());
+    let currentMonth = -1;
+    let currentGroup: typeof headers[0] | null = null;
+
+    while (d <= endDate) {
+      if (d.getMonth() !== currentMonth) {
+        currentMonth = d.getMonth();
+        currentGroup = { label: `${d.getFullYear()}/${currentMonth + 1}`, subLabels: [] };
+        headers.push(currentGroup);
+      }
+      const weekStart = new Date(Math.max(d.getTime(), startDate.getTime()));
+      const weekEnd = new Date(Math.min(d.getTime() + 6 * 86400000, endDate.getTime()));
+      const days = Math.floor((weekEnd.getTime() - weekStart.getTime()) / 86400000) + 1;
+      currentGroup!.subLabels.push({ label: `${weekStart.getDate()}`, width: days * dayWidth, dayOffset: dateToDayOffset(weekStart.toISOString().split('T')[0], start) });
+      d.setDate(d.getDate() + 7);
+    }
   } else {
-    let current = new Date(startDate);
-    let currentYear = '';
-    let yearGroup: typeof headers[0] | null = null;
+    const d = new Date(startDate);
+    let currentMonth = -1;
+    let currentGroup: typeof headers[0] | null = null;
 
-    while (current <= endDate) {
-      const yearLabel = current.getFullYear().toString();
-      if (yearLabel !== currentYear) {
-        if (yearGroup) headers.push(yearGroup);
-        yearGroup = { label: yearLabel, subLabels: [] };
-        currentYear = yearLabel;
+    while (d <= endDate) {
+      if (d.getMonth() !== currentMonth) {
+        currentMonth = d.getMonth();
+        currentGroup = { label: `${d.getFullYear()}/${currentMonth + 1}`, subLabels: [] };
+        headers.push(currentGroup);
       }
-
-      const monthStart = new Date(current.getFullYear(), current.getMonth(), 1);
-      const monthEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0);
-      const daysInMonth = monthEnd.getDate();
-      const dayOffset = dateToDayOffset(monthStart.toISOString().split('T')[0], start);
-
-      yearGroup!.subLabels.push({
-        label: current.toLocaleDateString('ja', { month: 'short' }),
-        width: daysInMonth * dayWidth,
-        dayOffset,
-      });
-
-      current.setMonth(current.getMonth() + 1);
-      current.setDate(1);
+      currentGroup!.subLabels.push({ label: `${d.getDate()}`, width: dayWidth, dayOffset: dateToDayOffset(d.toISOString().split('T')[0], start) });
+      d.setDate(d.getDate() + 1);
     }
-    if (yearGroup) headers.push(yearGroup);
   }
 
   return headers;
@@ -159,20 +158,32 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     setNewItemName('');
   };
 
-  // Build flat rows: group headers + tasks + subtasks, grouped by current sidebar section
+  // Build flat rows: group headers + tasks, grouped by current sidebar section
   const { rows, allTasks: tasks } = useMemo(() => {
     const result: GanttRow[] = [];
     const allTasks: Task[] = [];
 
-    const addTaskRows = (taskList: Task[], subtaskFilter?: (sub: Subtask, task: Task) => boolean) => {
+    const addTaskRows = (taskList: Task[]) => {
       for (const task of taskList) {
         allTasks.push(task);
         const depth = getTaskDepth(state, task.id);
         result.push({ kind: 'task', task, depth });
-        if (!task.collapsed && task.subtasks && task.subtasks.length > 0) {
-          const subs = subtaskFilter ? task.subtasks.filter((s) => subtaskFilter(s, task)) : task.subtasks;
-          for (const sub of subs)
-            result.push({ kind: 'subtask', subtask: sub, parentTask: task, depth: depth + 1 });
+        // Add children as task rows (they are already flattened for project view)
+        // For non-project views, manually flatten children
+        if (!task.collapsed && task.children.length > 0 && sidebarSection !== 'projects') {
+          const addChildren = (parentTask: Task, parentDepth: number) => {
+            const children = parentTask.children
+              .map((id) => state.tasks[id])
+              .filter(Boolean)
+              .sort((a, b) => a.order - b.order);
+            for (const child of children) {
+              allTasks.push(child);
+              result.push({ kind: 'task', task: child, depth: parentDepth + 1 });
+              if (!child.collapsed && child.children.length > 0)
+                addChildren(child, parentDepth + 1);
+            }
+          };
+          addChildren(task, depth);
         }
       }
     };
@@ -183,7 +194,12 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
         for (const p of projects) {
           const pTasks = getFlattenedTasks(state, p.id);
           result.push({ kind: 'group', id: p.id, label: p.name, color: p.color });
-          addTaskRows(pTasks);
+          // getFlattenedTasks already includes children, just push them
+          for (const task of pTasks) {
+            allTasks.push(task);
+            const depth = getTaskDepth(state, task.id);
+            result.push({ kind: 'task', task, depth });
+          }
         }
         break;
       }
@@ -191,15 +207,10 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
         const people = Object.values(state.people).sort((a, b) => a.order - b.order);
         for (const p of people) {
           const pTasks = Object.values(state.tasks)
-            .filter((t) => t.assigneeIds.includes(p.id) || t.subtasks?.some((s) => s.assigneeIds?.includes(p.id)))
+            .filter((t) => !t.parentId && hasDescendantWithAssignee(state, t.id, p.id))
             .sort((a, b) => a.order - b.order);
           result.push({ kind: 'group', id: p.id, label: p.name, color: p.color });
-          // If person is directly assigned to the task, show all subtasks;
-          // otherwise only show subtasks assigned to this person
-          addTaskRows(pTasks, (sub, task) => {
-            if (task.assigneeIds.includes(p.id)) return true;
-            return sub.assigneeIds?.includes(p.id) ?? false;
-          });
+          addTaskRows(pTasks);
         }
         break;
       }
@@ -207,14 +218,14 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
         const categories = Object.values(state.categories).sort((a, b) => a.order - b.order);
         for (const c of categories) {
           const cTasks = Object.values(state.tasks)
-            .filter((t) => t.categoryIds.includes(c.id))
+            .filter((t) => !t.parentId && t.categoryIds.includes(c.id))
             .sort((a, b) => a.order - b.order);
           result.push({ kind: 'group', id: c.id, label: c.name, color: c.color });
           addTaskRows(cTasks);
         }
         // Uncategorized
         const uncategorized = Object.values(state.tasks)
-          .filter((t) => t.categoryIds.length === 0)
+          .filter((t) => !t.parentId && t.categoryIds.length === 0)
           .sort((a, b) => a.order - b.order);
         if (uncategorized.length > 0) {
           result.push({ kind: 'group', id: '__uncategorized', label: t('detail.none'), color: '#6b7280' });
@@ -319,7 +330,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!resizingTaskListRef.current) return;
-      // Account for the sidebar width by using getBoundingClientRect of the chart area
       const chartArea = scrollRef.current?.parentElement;
       if (!chartArea) return;
       const rect = chartArea.getBoundingClientRect();
@@ -350,19 +360,24 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     setNewTaskTitle('');
   };
 
-  const handleAddSubtask = (parentId: string) => {
+  const handleAddChildTask = (parentId: string) => {
     if (!subtaskTitle.trim()) return;
     const parent = state.tasks[parentId];
     if (!parent) return;
-    const newSubtask = { id: uuidv4(), title: subtaskTitle.trim(), done: false, startDate: parent.startDate, endDate: parent.endDate, assigneeIds: [] as string[] };
-    setState(updateTask(state, parentId, { subtasks: [...(parent.subtasks ?? []), newSubtask] }));
+    setState(createTask(state, {
+      title: subtaskTitle.trim(),
+      parentId,
+      startDate: parent.startDate,
+      endDate: parent.endDate,
+      projectIds: [...parent.projectIds],
+    }));
     setSubtaskTitle('');
     setAddingSubtaskFor(null);
   };
 
   const toggleCollapse = (taskId: string) => {
     const task = state.tasks[taskId];
-    if (task && (task.children.length > 0 || (task.subtasks && task.subtasks.length > 0)))
+    if (task && task.children.length > 0)
       setState(updateTask(state, taskId, { collapsed: !task.collapsed }));
   };
 
@@ -379,10 +394,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
-    // Show task drop indicator when dragging a task (not a group)
     if (e.dataTransfer.types.includes('text/plain') && (!dragReorder || targetTaskId !== dragReorder.taskId)) {
       setDropTargetTaskId(targetTaskId);
-      // Determine above/below based on mouse position within the row
       const rect = e.currentTarget.getBoundingClientRect();
       setDropPosition(e.clientY < rect.top + rect.height / 2 ? 'above' : 'below');
     }
@@ -404,22 +417,18 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     const targetTask = tasks[targetIndex];
     if (!targetTask || draggedTaskId === targetTask.id) return;
 
-    // Collect all tasks sorted by current order, splice dragged to target position
     const allSorted = Object.values(state.tasks).sort((a, b) => a.order - b.order);
     const ids = allSorted.map((t) => t.id);
     const fromIdx = ids.indexOf(draggedTaskId);
     const toIdx = ids.indexOf(targetTask.id);
     if (fromIdx < 0 || toIdx < 0) return;
     ids.splice(fromIdx, 1);
-    // Adjust insert index: "above" = before target, "below" = after target
     let insertIdx: number;
-    if (currentDropPosition === 'below') {
+    if (currentDropPosition === 'below')
       insertIdx = fromIdx < toIdx ? toIdx : toIdx + 1;
-    } else {
+    else
       insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    }
     ids.splice(insertIdx, 0, draggedTaskId);
-    // Reassign order values
     const newTasks = { ...state.tasks };
     ids.forEach((id, i) => {
       newTasks[id] = { ...newTasks[id], order: i };
@@ -445,7 +454,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
-    // Only show group indicator when dragging a group, not a task
     if (dragGroupId && targetGroupId !== dragGroupId && targetGroupId !== '__uncategorized')
       setDropTargetGroupId(targetGroupId);
   };
@@ -455,7 +463,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     draggedId: string,
     targetId: string
   ): Record<string, T> => {
-    // Build sorted array, move dragged to target's position
     const sorted = Object.values(items).sort((a, b) => a.order - b.order);
     const ids = sorted.map((item) => (item as any).id as string);
     const fromIdx = ids.indexOf(draggedId);
@@ -464,7 +471,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     ids.splice(fromIdx, 1);
     const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
     ids.splice(insertIdx, 0, draggedId);
-    // Reassign order values
     const result = { ...items };
     ids.forEach((id, i) => {
       result[id] = { ...result[id], order: i };
@@ -499,108 +505,59 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Toolbar */}
-      <div className="h-12 flex items-center px-4 gap-3 shrink-0" style={{ background: theme.bg800, borderBottom: `1px solid ${theme.bg600}` }}>
-        <div className="flex items-center gap-2">
-          <label className="text-xs" style={{ color: theme.text400 }}>{t('toolbar.from')}</label>
-          <input type="date" value={state.timelineStartDate} onChange={(e) => setState({ ...state, timelineStartDate: e.target.value })} className="text-xs" />
-          <label className="text-xs" style={{ color: theme.text400 }}>{t('toolbar.to')}</label>
-          <input type="date" value={state.timelineEndDate} onChange={(e) => setState({ ...state, timelineEndDate: e.target.value })} className="text-xs" />
-        </div>
-      </div>
-
-      {/* Chart Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Task List */}
-        <div className="shrink-0 overflow-y-auto flex flex-col relative" style={{ width: taskListWidth }}>
-          {/* Section header with dropdown */}
-          <div ref={sectionMenuRef} className="relative shrink-0" style={{ height: HEADER_HEIGHT, background: theme.bg800, borderBottom: `1px solid ${theme.bg600}` }}>
+    <div className="flex flex-1 overflow-hidden">
+      <div className="flex h-full" style={{ width: '100%' }}>
+        {/* Task list (left) */}
+        <div className="relative flex flex-col shrink-0 overflow-hidden" style={{ width: taskListWidth, background: theme.bg800, borderRight: `1px solid ${theme.bg600}` }}>
+          {/* Section selector */}
+          <div className="relative shrink-0" ref={sectionMenuRef} style={{ borderBottom: `1px solid ${theme.bg600}` }}>
             <button
-              onClick={() => setSectionMenuOpen(!sectionMenuOpen)}
-              className="w-full h-full flex items-center justify-between px-4 text-xs font-semibold uppercase tracking-wider transition-all hover:opacity-80"
+              className="w-full px-3 py-2 text-left text-xs font-semibold tracking-wider uppercase flex items-center justify-between"
               style={{ color: theme.text300 }}
+              onClick={() => setSectionMenuOpen(!sectionMenuOpen)}
             >
               <span>{t(sectionLabelKeys[sidebarSection] as any)}</span>
-              <span className="text-[10px]" style={{ color: theme.text400 }}>{sectionMenuOpen ? '▲' : '▼'}</span>
+              <span className="text-[10px]">▼</span>
             </button>
             {sectionMenuOpen && (
               <div
-                className="absolute top-full left-0 right-0 z-50 py-1 fade-in"
+                className="absolute top-full left-0 w-full z-30 rounded-b-lg py-1"
                 style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, borderTop: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', '--menu-hover': theme.accent } as React.CSSProperties}
               >
-                {sectionKeys.map((s) => (
+                {sectionKeys.map((key) => (
                   <button
-                    key={s}
-                    onClick={() => setSection(s)}
-                    className="w-full text-left px-4 py-2 text-xs font-medium transition-all menu-item flex items-center gap-2"
+                    key={key}
+                    onClick={() => setSection(key)}
+                    className="w-full px-3 py-1.5 text-left text-xs font-medium flex items-center gap-2 menu-item"
                     style={{ color: theme.text200 }}
                   >
-                    <span className="w-4 text-center">{sidebarSection === s ? '✓' : ''}</span>
-                    {t(sectionLabelKeys[s] as any)}
+                    {sidebarSection === key && <span className="text-[10px]" style={{ color: theme.accent }}>✓</span>}
+                    <span className={sidebarSection === key ? '' : 'ml-4'}>{t(sectionLabelKeys[key] as any)}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Task & subtask rows */}
-          <div
-            className="flex-1 overflow-y-auto"
-            onDragOver={(e) => {
-              // Allow drop on empty scroll area below items
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              const types = e.dataTransfer.types;
-              if (types.includes('text/plain')) setDropTargetTaskId('__bottom');
-              if (types.includes('application/group-id')) setDropTargetGroupId('__bottom');
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const draggedTaskId = e.dataTransfer.getData('text/plain');
-              const draggedGroupId = e.dataTransfer.getData('application/group-id');
-
-              setDropTargetTaskId(null);
-              setDropTargetGroupId(null);
-              setDragReorder(null);
-              setDragGroupId(null);
-              if (draggedTaskId && state.tasks[draggedTaskId]) {
-                const maxOrder = Math.max(...Object.values(state.tasks).map((t) => t.order));
-                setState({ ...state, tasks: { ...state.tasks, [draggedTaskId]: { ...state.tasks[draggedTaskId], order: maxOrder + 1 } } });
-              } else if (draggedGroupId) {
-                let next = { ...state };
-                const moveToEnd = <T extends { order: number }>(items: Record<string, T>, id: string): Record<string, T> => {
-                  const maxOrder = Math.max(...Object.values(items).map((item) => item.order));
-                  return { ...items, [id]: { ...items[id], order: maxOrder + 1 } };
-                };
-                switch (sidebarSection) {
-                  case 'projects': next = { ...next, projects: moveToEnd(next.projects, draggedGroupId) }; break;
-                  case 'people': next = { ...next, people: moveToEnd(next.people, draggedGroupId) }; break;
-                  case 'categories': next = { ...next, categories: moveToEnd(next.categories, draggedGroupId) }; break;
-                  case 'milestones': next = { ...next, milestones: moveToEnd(next.milestones, draggedGroupId) }; break;
-                }
-                setState(next);
-              }
-            }}
-          >
+          {/* Task rows */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
             {rows.map((row, index) => {
               if (row.kind === 'group') {
                 const isUncategorized = row.id === '__uncategorized';
                 const isDragging = dragGroupId === row.id;
-                const isDropTarget = dropTargetGroupId === row.id && dragGroupId !== row.id;
+                const isDropTarget = dropTargetGroupId === row.id;
                 return (
                   <div
-                    key={`group-${row.id}`}
-                    className="flex items-center px-3 text-xs font-bold uppercase tracking-wider cursor-pointer hover:opacity-80 transition-all"
+                    key={`group-${index}`}
+                    className="flex items-center px-3 font-semibold text-xs tracking-wide cursor-pointer menu-item"
                     style={{
                       height: ROW_HEIGHT,
-                      background: row.color + '18',
-                      borderBottom: `1px solid ${theme.bg600}`,
-                      borderLeft: `3px solid ${row.color}`,
+                      '--menu-hover': row.color + '88',
+                      borderBottom: `1px solid ${theme.bg700}`,
                       borderTop: isDropTarget ? `2px solid ${theme.accent}` : '2px solid transparent',
                       color: row.color,
                       opacity: isDragging ? 0.4 : 1,
-                    }}
+                    } as React.CSSProperties}
                     onClick={() => {
                       if (isUncategorized) return;
                       setState({ ...state, editingItemId: row.id, editingItemType: sidebarSection, selectedTaskId: null });
@@ -619,131 +576,99 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                   </div>
                 );
               }
-              if (row.kind === 'task') {
-                const { task, depth } = row;
-                const status = getTaskStatus(task);
-                const statusColor = getStatusColor(status);
-                const hasChildren = task.children.length > 0;
-                const hasSubtasks = task.subtasks && task.subtasks.length > 0;
-                const canCollapse = hasChildren || hasSubtasks;
-                const categories = task.categoryIds.map((cid) => state.categories[cid]).filter(Boolean);
-                const taskIndex = tasks.indexOf(task);
 
-                const isDraggingTask = dragReorder?.taskId === task.id;
-                const isTaskDropTarget = dropTargetTaskId === task.id && dragReorder?.taskId !== task.id;
+              const { task, depth } = row;
+              const taskProgress = computeProgress(task, state.tasks);
+              const status = getTaskStatus(task, state.tasks);
+              const statusColor = getStatusColor(status);
+              const hasChildren = task.children.length > 0;
+              const isLeaf = !hasChildren;
+              const categories = task.categoryIds.map((cid) => state.categories[cid]).filter(Boolean);
+              const taskIndex = tasks.indexOf(task);
+              const isBeforeStart = new Date(task.startDate) > new Date();
+              const canAdd = canAddChild(state, task.id);
 
-                return (
-                  <div
-                    key={`task-${index}`}
-                    className="flex items-center cursor-pointer transition-colors group menu-item"
-                    style={{
-                      height: ROW_HEIGHT,
-                      paddingLeft: 12 + depth * 20,
-                      borderBottom: isTaskDropTarget && dropPosition === 'below' ? `2px solid ${theme.accent}` : `1px solid ${theme.bg700}`,
-                      borderTop: isTaskDropTarget && dropPosition === 'above' ? `2px solid ${theme.accent}` : '2px solid transparent',
-                      background: state.selectedTaskId === task.id ? theme.bg700 : undefined,
-                      '--menu-hover': theme.bg600,
-                      opacity: isDraggingTask ? 0.4 : 1,
-                    } as React.CSSProperties}
-                    onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
-                    draggable={!readOnly}
-                    onDragStart={(e) => handleDragStart(e, task.id, taskIndex)}
-                    onDragEnd={handleTaskDragEnd}
-                    onDragOver={(e) => handleTaskDragOver(e, task.id)}
-                    onDragLeave={() => { if (dropTargetTaskId === task.id) setDropTargetTaskId(null); }}
-                    onDrop={(e) => handleDrop(e, taskIndex)}
-                  >
-                    {!readOnly && (
-                      <span className="mr-1 cursor-grab opacity-0 group-hover:opacity-100 text-[10px]" style={{ color: theme.text400 }}>⋮⋮</span>
-                    )}
+              const isDraggingTask = dragReorder?.taskId === task.id;
+              const isTaskDropTarget = dropTargetTaskId === task.id && dragReorder?.taskId !== task.id;
 
-                    {canCollapse ? (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleCollapse(task.id); }}
-                        className="w-4 h-4 flex items-center justify-center text-xs mr-1"
-                        style={{ color: theme.text400 }}
-                      >
-                        {task.collapsed ? '▶' : '▼'}
-                      </button>
-                    ) : (
-                      <span className="w-4 mr-1" />
-                    )}
+              return (
+                <div
+                  key={`task-${index}`}
+                  className="flex items-center cursor-pointer transition-colors group menu-item"
+                  style={{
+                    height: ROW_HEIGHT,
+                    paddingLeft: 12 + depth * 20,
+                    borderBottom: isTaskDropTarget && dropPosition === 'below' ? `2px solid ${theme.accent}` : `1px solid ${theme.bg700}`,
+                    borderTop: isTaskDropTarget && dropPosition === 'above' ? `2px solid ${theme.accent}` : '2px solid transparent',
+                    background: state.selectedTaskId === task.id ? theme.bg700 : undefined,
+                    '--menu-hover': theme.bg600,
+                    opacity: isDraggingTask ? 0.4 : 1,
+                  } as React.CSSProperties}
+                  onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
+                  draggable={!readOnly}
+                  onDragStart={(e) => handleDragStart(e, task.id, taskIndex)}
+                  onDragEnd={handleTaskDragEnd}
+                  onDragOver={(e) => handleTaskDragOver(e, task.id)}
+                  onDragLeave={() => { if (dropTargetTaskId === task.id) setDropTargetTaskId(null); }}
+                  onDrop={(e) => handleDrop(e, taskIndex)}
+                >
+                  {!readOnly && (
+                    <span className="mr-1 cursor-grab opacity-0 group-hover:opacity-100 text-[10px]" style={{ color: theme.text400 }}>⋮⋮</span>
+                  )}
 
-                    <div className="w-2 h-2 rounded-full mr-2 shrink-0" style={{ background: new Date(task.startDate) > new Date() ? theme.text400 : statusColor }} />
-                    <span className="text-sm truncate flex-1 mr-2" style={{ color: new Date(task.startDate) > new Date() ? undefined : statusColor }}>{task.title}</span>
+                  {hasChildren ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleCollapse(task.id); }}
+                      className="w-4 h-4 flex items-center justify-center text-xs mr-1"
+                      style={{ color: theme.text400 }}
+                    >
+                      {task.collapsed ? '▶' : '▼'}
+                    </button>
+                  ) : (
+                    <span className="w-4 mr-1" />
+                  )}
 
-                    {categories.map((cat) => (
-                      <span key={cat.id} className="text-[9px] px-1.5 py-0.5 rounded font-medium mr-1 shrink-0" style={{ background: cat.color + '33', color: cat.color }}>
-                        {cat.name}
-                      </span>
-                    ))}
+                  <div className={`${isLeaf && depth > 0 ? 'w-1.5 h-1.5' : 'w-2 h-2'} rounded-full mr-2 shrink-0`} style={{ background: isBeforeStart ? theme.text400 : statusColor }} />
+                  <span className={`${depth > 0 ? 'text-xs' : 'text-sm'} truncate flex-1 mr-2`} style={{
+                    color: isBeforeStart ? undefined : statusColor,
+                    textDecoration: taskProgress >= 100 ? 'line-through' : 'none',
+                  }}>{task.title}</span>
 
-                    <div className="flex -space-x-1 mr-2 shrink-0">
-                      {task.assigneeIds.slice(0, 3).map((aid) => {
-                        const person = state.people[aid];
-                        if (!person) return null;
-                        return (
-                          <div key={aid} className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white" style={{ background: person.color, border: `1px solid ${theme.bg800}` }} title={person.name}>
-                            {person.avatar}
-                          </div>
-                        );
-                      })}
-                    </div>
+                  {depth === 0 && categories.map((cat) => (
+                    <span key={cat.id} className="text-[9px] px-1.5 py-0.5 rounded font-medium mr-1 shrink-0" style={{ background: cat.color + '33', color: cat.color }}>
+                      {cat.name}
+                    </span>
+                  ))}
 
-                    <span className="text-[10px] font-medium w-8 text-right shrink-0" style={{ color: statusColor }}>{task.progress}%</span>
-
-                    {!readOnly && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setAddingSubtaskFor(addingSubtaskFor === task.id ? null : task.id); }}
-                        className="ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity rounded px-1"
-                        style={{ background: theme.accent + '30', color: theme.accent }}
-                        title={t('tasks.addSubtask')}
-                      >
-                        +
-                      </button>
-                    )}
+                  <div className="flex -space-x-1 mr-2 shrink-0">
+                    {task.assigneeIds.slice(0, 3).map((aid) => {
+                      const person = state.people[aid];
+                      if (!person) return null;
+                      return (
+                        <div key={aid} className={`${depth > 0 ? 'w-4 h-4 text-[7px]' : 'w-5 h-5 text-[8px]'} rounded-full flex items-center justify-center font-bold text-white`} style={{ background: person.color, border: `1px solid ${theme.bg800}` }} title={person.name}>
+                          {person.avatar}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              } else {
-                const { subtask, parentTask, depth } = row;
-                const assigneeIds = subtask.assigneeIds ?? [];
-                const subStatus = getSubtaskStatus(subtask);
-                const subStatusColor = getStatusColor(subStatus);
-                const isBeforeStart = !subtask.startDate || new Date(subtask.startDate) > new Date();
-                return (
-                  <div
-                    key={`sub-${index}`}
-                    className="flex items-center cursor-pointer transition-colors menu-item"
-                    onClick={() => setState({ ...state, selectedTaskId: parentTask.id, editingItemId: null, editingItemType: null })}
-                    style={{
-                      height: ROW_HEIGHT,
-                      paddingLeft: 52 + depth * 20,
-                      borderBottom: `1px solid ${theme.bg700}`,
-                      '--menu-hover': theme.bg600,
-                    } as React.CSSProperties}
-                  >
-                    <div className="w-1.5 h-1.5 rounded-full mr-2 shrink-0" style={{ background: isBeforeStart && !subtask.done ? theme.text400 : subStatusColor }} />
-                    <span className="text-xs truncate flex-1 mr-2" style={{ color: isBeforeStart && !subtask.done ? undefined : subStatusColor, textDecoration: subtask.done ? 'line-through' : 'none' }}>{subtask.title}</span>
 
-                    <div className="flex -space-x-1 mr-2 shrink-0">
-                      {assigneeIds.slice(0, 2).map((aid) => {
-                        const person = state.people[aid];
-                        if (!person) return null;
-                        return (
-                          <div key={aid} className="w-4 h-4 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ background: person.color, border: `1px solid ${theme.bg800}` }} title={person.name}>
-                            {person.avatar}
-                          </div>
-                        );
-                      })}
-                    </div>
+                  <span className="text-[10px] font-medium w-8 text-right shrink-0" style={{ color: statusColor }}>{taskProgress}%</span>
 
-                    <span className="w-8 shrink-0" />
-                  </div>
-                );
-              }
+                  {!readOnly && canAdd && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setAddingSubtaskFor(addingSubtaskFor === task.id ? null : task.id); }}
+                      className="ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity rounded px-1"
+                      style={{ background: theme.accent + '30', color: theme.accent }}
+                      title={t('tasks.addSubtask')}
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+              );
             })}
 
-            {/* Subtask input */}
+            {/* Child task input */}
             {addingSubtaskFor && (
               <div className="flex items-center px-4 py-1" style={{ background: theme.bg700, borderBottom: `1px solid ${theme.bg600}` }}>
                 <input
@@ -752,13 +677,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                   placeholder={t('tasks.subtaskPlaceholder')}
                   className="flex-1 text-xs"
                   autoFocus
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleAddSubtask(addingSubtaskFor); if (e.key === 'Escape') setAddingSubtaskFor(null); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleAddChildTask(addingSubtaskFor); if (e.key === 'Escape') setAddingSubtaskFor(null); }}
                 />
-                <button onClick={() => handleAddSubtask(addingSubtaskFor)} className="ml-1 px-2 py-1 rounded text-xs font-medium" style={{ background: theme.accent + '30', color: theme.accent }}>{t('tasks.addButton')}</button>
+                <button onClick={() => handleAddChildTask(addingSubtaskFor)} className="ml-1 px-2 py-1 rounded text-xs font-medium" style={{ background: theme.accent + '30', color: theme.accent }}>{t('tasks.addButton')}</button>
               </div>
             )}
 
-            {/* Bottom drop zone — always present, fills remaining space */}
+            {/* Bottom drop zone */}
             <div
               className="flex-1 min-h-[40px]"
               style={{
@@ -767,7 +692,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
-                // Check dataTransfer types to determine what's being dragged
                 const types = e.dataTransfer.types;
                 if (types.includes('text/plain')) setDropTargetTaskId('__bottom');
                 if (types.includes('application/group-id')) setDropTargetGroupId('__bottom');
@@ -817,7 +741,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
           {/* Bottom inputs */}
           {!readOnly && (
             <div className="shrink-0" style={{ borderTop: `1px solid ${theme.bg600}`, background: theme.bg800 }}>
-              {/* New task */}
               <div className="px-3 py-2 flex items-center gap-1">
                 <input
                   value={newTaskTitle}
@@ -828,7 +751,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 />
                 <button onClick={handleAddTask} className="px-2 py-1.5 rounded text-xs font-medium shrink-0" style={{ background: theme.accent + '30', color: theme.accent }}>+</button>
               </div>
-              {/* New item (project/person/category/milestone) */}
               <div className="px-3 pb-2 flex items-center gap-1">
                 <input
                   value={newItemName}
@@ -913,14 +835,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 <line x1={todayOffset * dayWidth} y1={0} x2={todayOffset * dayWidth} y2={rows.length * ROW_HEIGHT + 40} stroke={theme.accent} strokeWidth={2} strokeDasharray="4,4" opacity={0.6} />
               )}
 
-              {/* Milestone diamonds — assign rows to avoid overlap */}
+              {/* Milestone diamonds */}
               {(() => {
                 const MIN_X_GAP = MIN_MILESTONE_X_GAP;
                 const sorted = milestones
                   .map((m) => ({ ...m, mx: dateToDayOffset(m.date, state.timelineStartDate) * dayWidth }))
                   .sort((a, b) => a.mx - b.mx);
-                // Greedy row assignment
-                const rowEnds: number[] = []; // tracks the rightmost x used per row
+                const rowEnds: number[] = [];
                 const milestoneRows: { m: typeof sorted[0]; row: number }[] = [];
                 for (const m of sorted) {
                   let placed = false;
@@ -939,14 +860,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 }
                 return milestoneRows.map(({ m, row }) => {
                   const mTasks = m.taskIds.map((id) => state.tasks[id]).filter(Boolean);
-                  const completedTasks = mTasks.filter((mt) => mt.progress >= 100).length;
+                  const completedTasks = mTasks.filter((mt) => computeProgress(mt, state.tasks) >= 100).length;
                   const totalTasks = mTasks.length;
                   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-                  // Determine milestone status from its tasks
                   let mStatus: 'completed' | 'on-track' | 'at-risk' | 'behind' = 'on-track';
                   if (totalTasks > 0 && completedTasks === totalTasks) mStatus = 'completed';
                   else if (totalTasks > 0) {
-                    const statuses = mTasks.map((mt) => getTaskStatus(mt));
+                    const statuses = mTasks.map((mt) => getTaskStatus(mt, state.tasks));
                     if (statuses.some((s) => s === 'behind')) mStatus = 'behind';
                     else if (statuses.some((s) => s === 'at-risk')) mStatus = 'at-risk';
                   }
@@ -985,78 +905,58 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 });
               })}
 
-              {/* Task & subtask bars */}
+              {/* Task bars */}
               {rows.map((row, index) => {
-                if (row.kind === 'group') return null;
-                if (row.kind === 'task') {
-                  const task = row.task;
-                  const startOffset = dateToDayOffset(task.startDate, state.timelineStartDate);
-                  const endOffset = dateToDayOffset(task.endDate, state.timelineStartDate);
-                  const x = startOffset * dayWidth;
-                  const width = Math.max((endOffset - startOffset) * dayWidth, 4);
-                  const y = index * ROW_HEIGHT + 8;
-                  const barHeight = ROW_HEIGHT - 16;
-                  const status = getTaskStatus(task);
-                  const statusColor = getStatusColor(status);
-                  const hasChildren = task.children.length > 0;
+                if (row.kind !== 'task') return null;
+                const task = row.task;
+                const depth = row.depth;
+                const startOffset = dateToDayOffset(task.startDate, state.timelineStartDate);
+                const endOffset = dateToDayOffset(task.endDate, state.timelineStartDate);
+                const x = startOffset * dayWidth;
+                const width = Math.max((endOffset - startOffset) * dayWidth, 4);
+                const hasChildren = task.children.length > 0;
+                const isLeafChild = !hasChildren && depth > 0;
 
-                  return (
-                    <g key={`bar-${index}`}>
-                      <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 2 : 6}
-                        fill={hasChildren ? theme.barParentBg : theme.barBg}
-                        stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
-                        style={{ cursor: readOnly ? 'pointer' : 'grab' }}
-                        onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
-                        onMouseDown={(e) => {
-                          if (readOnly) return;
-                          e.preventDefault();
-                          setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
-                        }}
-                      />
-                      <rect x={x} y={y} width={Math.max(width * (task.progress / 100), 0)} height={barHeight} rx={hasChildren ? 2 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
-                      {hasChildren && (
-                        <>
-                          <rect x={x} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
-                          <rect x={x + width - 6} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
-                        </>
-                      )}
-                      {width > 60 && (
-                        <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={11} fontWeight={500} style={{ pointerEvents: 'none' }}>
-                          {task.title.length > Math.floor(width / 7) ? task.title.slice(0, Math.floor(width / 7)) + '…' : task.title}
-                        </text>
-                      )}
-                      {!readOnly && (
-                        <rect x={x + width - 6} y={y} width={6} height={barHeight} fill="transparent" style={{ cursor: 'ew-resize' }}
-                          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragTask({ id: task.id, type: 'resize-end', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate }); }}
-                        />
-                      )}
-                    </g>
-                  );
-                } else {
-                  // Subtask bar — thinner, accent-colored
-                  const sub = row.subtask;
-                  if (!sub.startDate || !sub.endDate) return null;
-                  const startOffset = dateToDayOffset(sub.startDate, state.timelineStartDate);
-                  const endOffset = dateToDayOffset(sub.endDate, state.timelineStartDate);
-                  const x = startOffset * dayWidth;
-                  const width = Math.max((endOffset - startOffset) * dayWidth, 4);
-                  const y = index * ROW_HEIGHT + 14;
-                  const barHeight = ROW_HEIGHT - 28;
-                  const fillColor = sub.done ? '#9ca3af' : theme.accent;
+                // Leaf children get thinner bars
+                const y = isLeafChild ? index * ROW_HEIGHT + 14 : index * ROW_HEIGHT + 8;
+                const barHeight = isLeafChild ? ROW_HEIGHT - 28 : ROW_HEIGHT - 16;
 
-                  return (
-                    <g key={`subbar-${index}`}>
-                      <rect x={x} y={y} width={width} height={barHeight} rx={4}
-                        fill={fillColor} opacity={sub.done ? 0.4 : 0.5}
+                const taskProgress = computeProgress(task, state.tasks);
+                const status = getTaskStatus(task, state.tasks);
+                const statusColor = getStatusColor(status);
+
+                return (
+                  <g key={`bar-${index}`}>
+                    <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 2 : isLeafChild ? 4 : 6}
+                      fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
+                      stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
+                      style={{ cursor: readOnly ? 'pointer' : 'grab' }}
+                      onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
+                      onMouseDown={(e) => {
+                        if (readOnly) return;
+                        e.preventDefault();
+                        setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
+                      }}
+                    />
+                    <rect x={x} y={y} width={Math.max(width * (taskProgress / 100), 0)} height={barHeight} rx={hasChildren ? 2 : isLeafChild ? 4 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                    {hasChildren && (
+                      <>
+                        <rect x={x} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
+                        <rect x={x + width - 6} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
+                      </>
+                    )}
+                    {width > 60 && (
+                      <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 9 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
+                        {task.title.length > Math.floor(width / 7) ? task.title.slice(0, Math.floor(width / 7)) + '…' : task.title}
+                      </text>
+                    )}
+                    {!readOnly && (
+                      <rect x={x + width - 6} y={y} width={6} height={barHeight} fill="transparent" style={{ cursor: 'ew-resize' }}
+                        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragTask({ id: task.id, type: 'resize-end', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate }); }}
                       />
-                      {width > 50 && (
-                        <text x={x + 6} y={y + barHeight / 2 + 3} fill={theme.text100} fontSize={9} fontWeight={400} style={{ pointerEvents: 'none' }}>
-                          {sub.title.length > Math.floor(width / 6) ? sub.title.slice(0, Math.floor(width / 6)) + '…' : sub.title}
-                        </text>
-                      )}
-                    </g>
-                  );
-                }
+                    )}
+                  </g>
+                );
               })}
             </svg>
           </div>

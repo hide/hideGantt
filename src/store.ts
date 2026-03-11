@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { GanttState, Task, Project, Milestone, Person, Category } from './types';
-import { computeProgress } from './types';
+import { computeProgress, MAX_TASK_DEPTH } from './types';
 
 const STORAGE_KEY = 'gantt-app-state';
 
@@ -46,19 +46,66 @@ export function loadState(): GanttState {
       // Ensure new fields have valid defaults
       if (!merged.sidebarSection) merged.sidebarSection = 'projects';
       if (merged.sidebarFilterId === undefined) merged.sidebarFilterId = null;
-      // Migrate tasks: add subtasks field, categoryId→categoryIds, recompute progress
+
+      // Migrate tasks: categoryId→categoryIds, subtasks[]→child Tasks
       for (const [id, t] of Object.entries(merged.tasks)) {
         const task = t as any;
-        if (!task.subtasks) task.subtasks = [];
         // Migrate categoryId (single) → categoryIds (array)
         if (task.categoryId !== undefined && !task.categoryIds) {
           task.categoryIds = task.categoryId ? [task.categoryId] : [];
           delete task.categoryId;
         }
         if (!task.categoryIds) task.categoryIds = [];
-        task.progress = computeProgress(task as Task);
+        if (!task.children) task.children = [];
+        if (task.parentId === undefined) task.parentId = null;
+        if (task.collapsed === undefined) task.collapsed = false;
         (merged.tasks as Record<string, Task>)[id] = task;
       }
+
+      // Migrate subtasks[] → child Task entries
+      const tasksToMigrate = Object.values(merged.tasks).filter((t: any) => t.subtasks && t.subtasks.length > 0);
+      for (const parent of tasksToMigrate as any[]) {
+        for (let i = 0; i < parent.subtasks.length; i++) {
+          const sub = parent.subtasks[i];
+          // Skip if already migrated (child task with this id exists)
+          if (merged.tasks[sub.id]) continue;
+          const childTask: Task = {
+            id: sub.id,
+            title: sub.title,
+            description: '',
+            startDate: sub.startDate || parent.startDate,
+            endDate: sub.endDate || parent.endDate,
+            progress: sub.done ? 100 : 0,
+            assigneeIds: sub.assigneeIds || [],
+            categoryIds: [],
+            projectIds: [...parent.projectIds],
+            dependencyIds: [],
+            parentId: parent.id,
+            children: [],
+            milestoneId: null,
+            order: i,
+            collapsed: false,
+          };
+          merged.tasks[sub.id] = childTask;
+          if (!parent.children.includes(sub.id))
+            parent.children.push(sub.id);
+        }
+        delete parent.subtasks;
+      }
+
+      // Clean up subtasks field from all tasks
+      for (const task of Object.values(merged.tasks) as any[]) {
+        delete task.subtasks;
+      }
+
+      // Recompute progress for all tasks
+      for (const [id, t] of Object.entries(merged.tasks)) {
+        const task = t as Task;
+        if (task.children.length > 0)
+          task.progress = computeProgress(task, merged.tasks as Record<string, Task>);
+        (merged.tasks as Record<string, Task>)[id] = task;
+      }
+
       // Migrate: add order field to projects, people, categories, milestones
       let idx = 0;
       for (const p of Object.values(merged.projects) as any[]) {
@@ -105,14 +152,18 @@ export function createTask(
       ? [state.activeProjectId]
       : [];
 
+  // For child tasks, inherit order within siblings
+  const siblingCount = partial.parentId
+    ? (state.tasks[partial.parentId]?.children.length ?? 0)
+    : Object.values(state.tasks).filter((t) => !t.parentId).length;
+
   const task: Task = {
     id,
     title: partial.title,
     description: partial.description ?? '',
     startDate: partial.startDate ?? now.toISOString().split('T')[0],
     endDate: partial.endDate ?? nextWeek.toISOString().split('T')[0],
-    progress: 0,
-    subtasks: partial.subtasks ?? [],
+    progress: partial.progress ?? 0,
     assigneeIds: partial.assigneeIds ?? [],
     categoryIds: partial.categoryIds ?? [],
     projectIds,
@@ -120,17 +171,20 @@ export function createTask(
     parentId: partial.parentId ?? null,
     children: [],
     milestoneId: partial.milestoneId ?? null,
-    order: Object.keys(state.tasks).length,
+    order: siblingCount,
     collapsed: false,
   };
 
   const newTasks = { ...state.tasks, [id]: task };
 
   if (task.parentId && newTasks[task.parentId]) {
+    const parent = newTasks[task.parentId];
     newTasks[task.parentId] = {
-      ...newTasks[task.parentId],
-      children: [...newTasks[task.parentId].children, id],
+      ...parent,
+      children: [...parent.children, id],
     };
+    // Recompute parent progress
+    newTasks[task.parentId].progress = computeProgress(newTasks[task.parentId], newTasks);
   }
 
   return { ...state, tasks: newTasks };
@@ -145,15 +199,28 @@ export function updateTask(
   if (!task) return state;
 
   const merged = { ...task, ...updates, id: taskId };
-  // Auto-compute progress from subtasks
-  merged.progress = computeProgress(merged);
 
   const newTasks = {
     ...state.tasks,
     [taskId]: merged,
   };
 
+  // Recompute progress up the parent chain
+  recomputeProgressChain(newTasks, taskId);
+
   return { ...state, tasks: newTasks };
+}
+
+/** Recompute progress for a task and all its ancestors */
+function recomputeProgressChain(tasks: Record<string, Task>, taskId: string): void {
+  let currentId: string | null = taskId;
+  while (currentId) {
+    const task = tasks[currentId];
+    if (!task) break;
+    if (task.children.length > 0)
+      task.progress = computeProgress(task, tasks);
+    currentId = task.parentId;
+  }
 }
 
 export function deleteTask(state: GanttState, taskId: string): GanttState {
@@ -179,6 +246,10 @@ export function deleteTask(state: GanttState, taskId: string): GanttState {
     }
   };
   deleteChildren(taskId);
+
+  // Recompute parent progress after deletion
+  if (task.parentId && newTasks[task.parentId])
+    recomputeProgressChain(newTasks, task.parentId);
 
   // Remove from milestones
   const newMilestones = { ...state.milestones };
@@ -240,9 +311,8 @@ export function deleteProject(state: GanttState, projectId: string): GanttState 
   const newTasks = { ...state.tasks };
   for (const [tId, t] of Object.entries(newTasks)) {
     const filtered = t.projectIds.filter((id) => id !== projectId);
-    if (filtered.length !== t.projectIds.length) {
+    if (filtered.length !== t.projectIds.length)
       newTasks[tId] = { ...t, projectIds: filtered };
-    }
   }
 
   const newMilestones = { ...state.milestones };
@@ -299,9 +369,8 @@ export function deleteMilestone(state: GanttState, milestoneId: string): GanttSt
 
   const newTasks = { ...state.tasks };
   for (const [tId, t] of Object.entries(newTasks)) {
-    if (t.milestoneId === milestoneId) {
+    if (t.milestoneId === milestoneId)
       newTasks[tId] = { ...t, milestoneId: null };
-    }
   }
 
   return { ...state, milestones: newMilestones, tasks: newTasks };
@@ -355,9 +424,8 @@ export function deletePerson(state: GanttState, personId: string): GanttState {
   const newTasks = { ...state.tasks };
   for (const [tId, t] of Object.entries(newTasks)) {
     const filtered = t.assigneeIds.filter((id) => id !== personId);
-    if (filtered.length !== t.assigneeIds.length) {
+    if (filtered.length !== t.assigneeIds.length)
       newTasks[tId] = { ...t, assigneeIds: filtered };
-    }
   }
 
   return { ...state, people: newPeople, tasks: newTasks };
@@ -398,9 +466,8 @@ export function deleteCategory(state: GanttState, categoryId: string): GanttStat
 
   const newTasks = { ...state.tasks };
   for (const [tId, t] of Object.entries(newTasks)) {
-    if (t.categoryIds.includes(categoryId)) {
+    if (t.categoryIds.includes(categoryId))
       newTasks[tId] = { ...t, categoryIds: t.categoryIds.filter((id) => id !== categoryId) };
-    }
   }
 
   return { ...state, categories: newCategories, tasks: newTasks };
@@ -447,12 +514,24 @@ export function getTaskDepth(state: GanttState, taskId: string): number {
   return depth;
 }
 
+export function canAddChild(state: GanttState, taskId: string): boolean {
+  return getTaskDepth(state, taskId) < MAX_TASK_DEPTH;
+}
+
+/** Check if any descendant of a task has a given person assigned */
+export function hasDescendantWithAssignee(state: GanttState, taskId: string, personId: string): boolean {
+  const task = state.tasks[taskId];
+  if (!task) return false;
+  if (task.assigneeIds.includes(personId)) return true;
+  return task.children.some((childId) => hasDescendantWithAssignee(state, childId, personId));
+}
+
 export function getMilestoneProgress(state: GanttState, milestoneId: string): number {
   const milestone = state.milestones[milestoneId];
   if (!milestone || milestone.taskIds.length === 0) return 0;
   const tasks = milestone.taskIds.map((id) => state.tasks[id]).filter(Boolean);
   if (tasks.length === 0) return 0;
-  return Math.round(tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length);
+  return Math.round(tasks.reduce((sum, t) => sum + computeProgress(t, state.tasks), 0) / tasks.length);
 }
 
 export function getPersonTasks(state: GanttState, personId: string): Task[] {
@@ -474,7 +553,7 @@ export function getFilteredFlattenedTasks(state: GanttState): Task[] {
   switch (sidebarSection) {
     case 'people':
       filtered = Object.values(state.tasks)
-        .filter((t) => t.assigneeIds.includes(sidebarFilterId) || t.subtasks?.some((s) => s.assigneeIds?.includes(sidebarFilterId)))
+        .filter((t) => hasDescendantWithAssignee(state, t.id, sidebarFilterId))
         .sort((a, b) => a.order - b.order);
       break;
     case 'categories':
@@ -512,5 +591,5 @@ export function getPersonMilestoneProgress(
     .map((id) => state.tasks[id])
     .filter((t) => t && t.assigneeIds.includes(personId));
   if (tasks.length === 0) return 0;
-  return Math.round(tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length);
+  return Math.round(tasks.reduce((sum, t) => sum + computeProgress(t, state.tasks), 0) / tasks.length);
 }

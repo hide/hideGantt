@@ -101,8 +101,9 @@ const translations = {
   'detail.dependencies': { ja: '依存タスク', en: 'Dependencies' },
   'detail.none': { ja: 'なし', en: 'None' },
   'detail.status': { ja: 'ステータス', en: 'Status' },
-  'detail.subtasks': { ja: 'サブタスク', en: 'Subtasks' },
-  'detail.addSubtask': { ja: 'サブタスク名を入力...', en: 'Enter subtask name...' },
+  'detail.subtasks': { ja: '子タスク', en: 'Child Tasks' },
+  'detail.addSubtask': { ja: '子タスク名を入力...', en: 'Enter child task name...' },
+  'detail.markDone': { ja: '完了にする', en: 'Mark as done' },
   'detail.deleteTask': { ja: 'タスクを削除', en: 'Delete task' },
 
   // Delete by type
