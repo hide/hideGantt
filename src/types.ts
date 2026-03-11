@@ -103,6 +103,22 @@ export function getTaskStatus(task: Task): TaskStatus {
   return 'on-track';
 }
 
+export function getSubtaskStatus(subtask: Subtask): TaskStatus {
+  if (subtask.done) return 'completed';
+  if (!subtask.startDate || !subtask.endDate) return 'on-track';
+  const now = new Date();
+  const start = new Date(subtask.startDate);
+  const end = new Date(subtask.endDate);
+  const totalDuration = end.getTime() - start.getTime();
+  if (totalDuration <= 0) return 'on-track';
+  const elapsed = now.getTime() - start.getTime();
+  if (elapsed <= 0) return 'on-track';
+  const expectedProgress = Math.min(100, Math.max(0, (elapsed / totalDuration) * 100));
+  if (expectedProgress > 25) return 'behind';
+  if (expectedProgress > 10) return 'at-risk';
+  return 'on-track';
+}
+
 export function getStatusColor(status: TaskStatus): string {
   switch (status) {
     case 'completed': return '#9ca3af'; // gray

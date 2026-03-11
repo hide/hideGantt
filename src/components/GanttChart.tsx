@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import type { GanttState, Task, Subtask } from '../types';
-import { getTaskStatus, getStatusColor } from '../types';
+import { getTaskStatus, getSubtaskStatus, getStatusColor } from '../types';
 import type { SidebarSection } from '../types';
 import { getFlattenedTasks, getTaskDepth, updateTask, createTask, createProject, createPerson, createCategory, createMilestone } from '../store';
 import { useTheme } from '../ThemeContext';
@@ -352,7 +353,9 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const handleAddSubtask = (parentId: string) => {
     if (!subtaskTitle.trim()) return;
     const parent = state.tasks[parentId];
-    setState(createTask(state, { title: subtaskTitle.trim(), parentId, projectIds: parent.projectIds, startDate: parent.startDate, endDate: parent.endDate }));
+    if (!parent) return;
+    const newSubtask = { id: uuidv4(), title: subtaskTitle.trim(), done: false, startDate: parent.startDate, endDate: parent.endDate, assigneeIds: [] as string[] };
+    setState(updateTask(state, parentId, { subtasks: [...(parent.subtasks ?? []), newSubtask] }));
     setSubtaskTitle('');
     setAddingSubtaskFor(null);
   };
@@ -524,15 +527,16 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             {sectionMenuOpen && (
               <div
                 className="absolute top-full left-0 right-0 z-50 py-1 fade-in"
-                style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, borderTop: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}
+                style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, borderTop: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', '--menu-hover': theme.accent } as React.CSSProperties}
               >
                 {sectionKeys.map((s) => (
                   <button
                     key={s}
                     onClick={() => setSection(s)}
-                    className="w-full text-left px-4 py-2 text-xs font-medium transition-all"
-                    style={sidebarSection === s ? { background: theme.accent, color: '#fff' } : { color: theme.text200 }}
+                    className="w-full text-left px-4 py-2 text-xs font-medium transition-all menu-item flex items-center gap-2"
+                    style={{ color: theme.text200 }}
                   >
+                    <span className="w-4 text-center">{sidebarSection === s ? '✓' : ''}</span>
                     {t(sectionLabelKeys[s] as any)}
                   </button>
                 ))}
@@ -631,15 +635,16 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 return (
                   <div
                     key={`task-${index}`}
-                    className="flex items-center cursor-pointer transition-colors group"
+                    className="flex items-center cursor-pointer transition-colors group menu-item"
                     style={{
                       height: ROW_HEIGHT,
                       paddingLeft: 12 + depth * 20,
                       borderBottom: isTaskDropTarget && dropPosition === 'below' ? `2px solid ${theme.accent}` : `1px solid ${theme.bg700}`,
                       borderTop: isTaskDropTarget && dropPosition === 'above' ? `2px solid ${theme.accent}` : '2px solid transparent',
-                      background: state.selectedTaskId === task.id ? theme.bg700 : 'transparent',
+                      background: state.selectedTaskId === task.id ? theme.bg700 : undefined,
+                      '--menu-hover': theme.bg600,
                       opacity: isDraggingTask ? 0.4 : 1,
-                    }}
+                    } as React.CSSProperties}
                     onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
                     draggable={!readOnly}
                     onDragStart={(e) => handleDragStart(e, task.id, taskIndex)}
@@ -664,8 +669,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       <span className="w-4 mr-1" />
                     )}
 
-                    <div className="w-2 h-2 rounded-full mr-2 shrink-0" style={{ background: statusColor }} />
-                    <span className="text-sm truncate flex-1 mr-2">{task.title}</span>
+                    <div className="w-2 h-2 rounded-full mr-2 shrink-0" style={{ background: new Date(task.startDate) > new Date() ? theme.text400 : statusColor }} />
+                    <span className="text-sm truncate flex-1 mr-2" style={{ color: new Date(task.startDate) > new Date() ? undefined : statusColor }}>{task.title}</span>
 
                     {categories.map((cat) => (
                       <span key={cat.id} className="text-[9px] px-1.5 py-0.5 rounded font-medium mr-1 shrink-0" style={{ background: cat.color + '33', color: cat.color }}>
@@ -700,21 +705,25 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                   </div>
                 );
               } else {
-                const { subtask, depth } = row;
+                const { subtask, parentTask, depth } = row;
                 const assigneeIds = subtask.assigneeIds ?? [];
+                const subStatus = getSubtaskStatus(subtask);
+                const subStatusColor = getStatusColor(subStatus);
+                const isBeforeStart = !subtask.startDate || new Date(subtask.startDate) > new Date();
                 return (
                   <div
                     key={`sub-${index}`}
-                    className="flex items-center cursor-default transition-colors"
+                    className="flex items-center cursor-pointer transition-colors menu-item"
+                    onClick={() => setState({ ...state, selectedTaskId: parentTask.id, editingItemId: null, editingItemType: null })}
                     style={{
                       height: ROW_HEIGHT,
                       paddingLeft: 52 + depth * 20,
                       borderBottom: `1px solid ${theme.bg700}`,
-                      background: 'transparent',
-                    }}
+                      '--menu-hover': theme.bg600,
+                    } as React.CSSProperties}
                   >
-                    <div className="w-1.5 h-1.5 rounded-full mr-2 shrink-0" style={{ background: subtask.done ? '#9ca3af' : theme.accent }} />
-                    <span className="text-xs truncate flex-1 mr-2" style={{ color: subtask.done ? theme.text400 : theme.text200, textDecoration: subtask.done ? 'line-through' : 'none' }}>{subtask.title}</span>
+                    <div className="w-1.5 h-1.5 rounded-full mr-2 shrink-0" style={{ background: isBeforeStart && !subtask.done ? theme.text400 : subStatusColor }} />
+                    <span className="text-xs truncate flex-1 mr-2" style={{ color: isBeforeStart && !subtask.done ? undefined : subStatusColor, textDecoration: subtask.done ? 'line-through' : 'none' }}>{subtask.title}</span>
 
                     <div className="flex -space-x-1 mr-2 shrink-0">
                       {assigneeIds.slice(0, 2).map((aid) => {

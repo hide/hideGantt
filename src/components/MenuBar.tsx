@@ -6,6 +6,7 @@ import type { ThemeName } from '../theme';
 import type { Lang } from '../i18n';
 import type { GanttState } from '../types';
 import { saveState } from '../store';
+import { exportPDF, exportExcel, exportJSON, importJSON } from '../exporters';
 
 interface MenuBarProps {
   state: GanttState;
@@ -18,9 +19,10 @@ interface MenuBarProps {
   readOnly: boolean;
 }
 
-type SubMenu = 'view' | 'theme' | 'language' | null;
+type SubMenu = 'view' | 'theme' | 'language' | 'export' | 'import' | null;
 
-const APP_VERSION = import.meta.env.APP_VERSION ?? '1.0.0';
+import pkg from '../../package.json';
+const APP_VERSION = pkg.version;
 
 export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLangChange, onShare, readOnly }: MenuBarProps) {
   const theme = useTheme();
@@ -44,52 +46,30 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
 
   const closeAll = () => { setMenuOpen(false); setSubMenu(null); };
 
-  const handleExport = useCallback(() => {
-    const json = JSON.stringify(state, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `gantt-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    closeAll();
-  }, [state]);
-
-  const handleImport = useCallback(() => {
-    fileInputRef.current?.click();
-    closeAll();
-  }, []);
-
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const imported = JSON.parse(ev.target?.result as string) as GanttState;
-        setState(imported);
-        saveState(imported);
-      } catch (err) {
-        alert('Invalid JSON file');
-      }
-    };
-    reader.readAsText(file);
+    importJSON(file).then((imported) => {
+      setState(imported);
+      saveState(imported);
+    }).catch(() => {
+      alert('Invalid JSON file');
+    });
     e.target.value = '';
   }, [setState]);
 
-  const dropdownStyle = {
+  const dropdownStyle: React.CSSProperties & Record<string, string> = {
     background: theme.bg700,
     border: `1px solid ${theme.bg500}`,
     boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+    '--menu-hover': theme.accent,
   };
 
-  const itemStyle = (isActive: boolean) => ({
-    background: isActive ? theme.accent : 'transparent',
-    color: isActive ? '#fff' : theme.text200,
+  const itemStyle = (): React.CSSProperties => ({
+    color: theme.text200,
   });
 
-  const itemBase = "w-full text-left px-3 py-1.5 text-xs font-medium transition-all hover:opacity-80";
+  const itemBase = "w-full text-left px-3 py-1.5 text-xs font-medium transition-all menu-item";
 
   return (
     <div
@@ -113,7 +93,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
             <button
               onClick={() => { setAboutOpen(true); closeAll(); }}
               className={itemBase}
-              style={itemStyle(false)}
+              style={itemStyle()}
               onMouseEnter={() => setSubMenu(null)}
             >
               {t('menu.about' as any)}
@@ -129,7 +109,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
             >
               <button
                 className={`${itemBase} flex items-center justify-between`}
-                style={itemStyle(subMenu === 'view')}
+                style={itemStyle()}
               >
                 <span>{t('menu.view')}</span>
                 <span className="text-[10px] ml-4">▶</span>
@@ -139,14 +119,14 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
                   <button
                     onClick={() => { setState({ ...state, viewMode: 'gantt' }); closeAll(); }}
                     className={itemBase}
-                    style={itemStyle(state.viewMode === 'gantt')}
+                    style={itemStyle()}
                   >
                     {state.viewMode === 'gantt' ? '✓ ' : '　'}{t('menu.gantt')}
                   </button>
                   <button
                     onClick={() => { setState({ ...state, viewMode: 'dashboard' }); closeAll(); }}
                     className={itemBase}
-                    style={itemStyle(state.viewMode === 'dashboard')}
+                    style={itemStyle()}
                   >
                     {state.viewMode === 'dashboard' ? '✓ ' : '　'}{t('menu.dashboard')}
                   </button>
@@ -161,7 +141,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
             >
               <button
                 className={`${itemBase} flex items-center justify-between`}
-                style={itemStyle(subMenu === 'theme')}
+                style={itemStyle()}
               >
                 <span>{t('menu.theme')}</span>
                 <span className="text-[10px] ml-4">▶</span>
@@ -173,7 +153,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
                       key={key}
                       onClick={() => { onThemeChange(key); closeAll(); }}
                       className={itemBase}
-                      style={itemStyle(themeName === key)}
+                      style={itemStyle()}
                     >
                       {themeName === key ? '✓ ' : '　'}{t(`theme.${key}` as any)}
                     </button>
@@ -189,7 +169,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
             >
               <button
                 className={`${itemBase} flex items-center justify-between`}
-                style={itemStyle(subMenu === 'language')}
+                style={itemStyle()}
               >
                 <span>{t('menu.language')}</span>
                 <span className="text-[10px] ml-4">▶</span>
@@ -201,7 +181,7 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
                       key={l}
                       onClick={() => { onLangChange(l); closeAll(); }}
                       className={itemBase}
-                      style={itemStyle(lang === l)}
+                      style={itemStyle()}
                     >
                       {lang === l ? '✓ ' : '　'}{t(`lang.${l}` as any)}
                     </button>
@@ -213,34 +193,86 @@ export function MenuBar({ state, setState, themeName, onThemeChange, lang, onLan
             {/* Divider */}
             <div className="my-1 mx-2" style={{ borderTop: `1px solid ${theme.bg500}` }} />
 
-            {/* Data items (flat) */}
-            <button
-              onClick={handleExport}
-              className={itemBase}
-              style={itemStyle(false)}
-              onMouseEnter={() => setSubMenu(null)}
+            {/* ===== Export (書き出し) submenu ===== */}
+            <div className="relative"
+              onMouseEnter={() => setSubMenu('export')}
+              onMouseLeave={() => { if (subMenu === 'export') setSubMenu(null); }}
             >
-              {t('menu.export' as any)}
-            </button>
-            {!readOnly && (
               <button
-                onClick={handleImport}
-                className={itemBase}
-                style={itemStyle(false)}
-                onMouseEnter={() => setSubMenu(null)}
+                className={`${itemBase} flex items-center justify-between`}
+                style={itemStyle()}
               >
-                {t('menu.import' as any)}
+                <span>{t('menu.export' as any)}</span>
+                <span className="text-[10px] ml-4">▶</span>
               </button>
-            )}
+              {subMenu === 'export' && (
+                <div
+                  className="absolute left-full top-0 ml-0.5 rounded-lg py-1 min-w-[160px] z-50 fade-in"
+                  style={dropdownStyle}
+                >
+                  <button
+                    onClick={() => { exportPDF(state, lang); closeAll(); }}
+                    className={itemBase}
+                    style={itemStyle()}
+                  >
+                    {t('menu.exportPDF' as any)}
+                  </button>
+                  <button
+                    onClick={() => { exportExcel(state, lang); closeAll(); }}
+                    className={itemBase}
+                    style={itemStyle()}
+                  >
+                    {t('menu.exportExcel' as any)}
+                  </button>
+
+                  {/* Divider */}
+                  <div className="my-1 mx-2" style={{ borderTop: `1px solid ${theme.bg500}` }} />
+
+                  {!readOnly && (
+                    <button
+                      onClick={() => { onShare(); closeAll(); }}
+                      className={itemBase}
+                      style={itemStyle()}
+                    >
+                      {t('menu.exportURL' as any)}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { exportJSON(state); closeAll(); }}
+                    className={itemBase}
+                    style={itemStyle()}
+                  >
+                    {t('menu.exportJSON' as any)}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* ===== Import (読み込み) submenu ===== */}
             {!readOnly && (
-              <button
-                onClick={() => { onShare(); closeAll(); }}
-                className={itemBase}
-                style={itemStyle(false)}
-                onMouseEnter={() => setSubMenu(null)}
+              <div className="relative"
+                onMouseEnter={() => setSubMenu('import')}
+                onMouseLeave={() => { if (subMenu === 'import') setSubMenu(null); }}
               >
-                {t('menu.shareSnapshot' as any)}
-              </button>
+                <button
+                  className={`${itemBase} flex items-center justify-between`}
+                  style={itemStyle()}
+                >
+                  <span>{t('menu.import' as any)}</span>
+                  <span className="text-[10px] ml-4">▶</span>
+                </button>
+                {subMenu === 'import' && (
+                  <div className="absolute left-full top-0 ml-0.5 rounded-lg py-1 min-w-[140px] z-50 fade-in" style={dropdownStyle}>
+                    <button
+                      onClick={() => { fileInputRef.current?.click(); closeAll(); }}
+                      className={itemBase}
+                      style={itemStyle()}
+                    >
+                      {t('menu.importJSON' as any)}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
 
           </div>

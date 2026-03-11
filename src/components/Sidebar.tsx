@@ -39,10 +39,11 @@ function TaskList({ tasks, state, setState, contextProjectId }: { tasks: Task[];
           <button
             key={task.id}
             onClick={(e) => { e.stopPropagation(); setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null }); }}
-            className="w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-left transition-all hover:opacity-80"
+            className="w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-left transition-all menu-item"
             style={{
-              background: state.selectedTaskId === task.id ? theme.bg500 : 'transparent',
-            }}
+              background: state.selectedTaskId === task.id ? theme.bg500 : undefined,
+              '--menu-hover': theme.bg600,
+            } as React.CSSProperties}
           >
             <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusColor }} />
             <span className="text-[11px] truncate flex-1" style={{ color: theme.text200 }}>{task.title}</span>
@@ -184,15 +185,16 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
         {sectionMenuOpen && (
           <div
             className="absolute top-full left-0 right-0 z-50 rounded-b-lg py-1 fade-in"
-            style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, borderTop: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}
+            style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, borderTop: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', '--menu-hover': theme.accent } as React.CSSProperties}
           >
             {sectionKeys.map((s) => (
               <button
                 key={s}
                 onClick={() => { setSection(s); setSectionMenuOpen(false); }}
-                className="w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 transition-all"
-                style={section === s ? { background: theme.accent, color: '#fff' } : { color: theme.text200 }}
+                className="w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 transition-all menu-item"
+                style={{ color: theme.text200 }}
               >
+                <span className="w-4 text-center">{section === s ? '✓' : ''}</span>
                 <span>{sectionIcons[s]}</span>
                 {t(sectionLabelKeys[s])}
               </button>
@@ -213,8 +215,8 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
               <div key={p.id} className="mb-1">
                 <div
                   onClick={() => { toggleExpand(p.id); setState({ ...state, activeProjectId: p.id }); }}
-                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all"
-                  style={{ background: state.activeProjectId === p.id ? theme.bg600 : 'transparent' }}
+                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all menu-item"
+                  style={{ background: state.activeProjectId === p.id ? theme.bg600 : undefined, '--menu-hover': theme.bg500 } as React.CSSProperties}
                 >
                   <span className="text-[8px] shrink-0 transition-transform" style={{ color: theme.text400, transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                   <div className="w-3 h-3 rounded-sm shrink-0" style={{ background: p.color }} />
@@ -236,8 +238,8 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
               <div key={p.id} className="mb-1">
                 <div
                   onClick={() => { toggleExpand(p.id); setState({ ...state, sidebarFilterId: p.id }); }}
-                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all"
-                  style={{ background: isExpanded ? theme.bg600 : 'transparent' }}
+                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all menu-item"
+                  style={{ background: isExpanded ? theme.bg600 : undefined, '--menu-hover': theme.bg500 } as React.CSSProperties}
                 >
                   <span className="text-[8px] shrink-0 transition-transform" style={{ color: theme.text400, transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                   <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0" style={{ background: p.color }}>{p.avatar}</div>
@@ -259,8 +261,8 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
               <div key={c.id} className="mb-1">
                 <div
                   onClick={() => { toggleExpand(c.id); setState({ ...state, sidebarFilterId: c.id }); }}
-                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all"
-                  style={{ background: isExpanded ? theme.bg600 : 'transparent' }}
+                  className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all menu-item"
+                  style={{ background: isExpanded ? theme.bg600 : undefined, '--menu-hover': theme.bg500 } as React.CSSProperties}
                 >
                   <span className="text-[8px] shrink-0 transition-transform" style={{ color: theme.text400, transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                   <div className="w-3 h-3 rounded-full shrink-0" style={{ background: c.color }} />
@@ -285,8 +287,8 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
                 <div key={m.id} className="mb-1">
                   <div
                     onClick={() => { toggleExpand(m.id); setState({ ...state, sidebarFilterId: m.id }); }}
-                    className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all"
-                    style={{ background: isExpanded ? theme.bg600 : 'transparent' }}
+                    className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all menu-item"
+                    style={{ background: isExpanded ? theme.bg600 : undefined, '--menu-hover': theme.bg500 } as React.CSSProperties}
                   >
                     <span className="text-[8px] shrink-0 transition-transform" style={{ color: theme.text400, transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                     <span className="text-sm truncate flex-1 hover:underline" onClick={(e) => { e.stopPropagation(); openEdit(m.id); }}>{m.title}</span>

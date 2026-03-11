@@ -29,7 +29,6 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
 
   const handleDelete = () => {
     setState({ ...deleteTask(state, taskId), selectedTaskId: null });
-    onClose();
   };
 
   const allTasks = Object.values(state.tasks).filter((t) => t.id !== taskId);

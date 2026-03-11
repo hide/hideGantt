@@ -78,3 +78,8 @@ button {
 .milestone-diamond {
   clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
 }
+
+.menu-item:hover {
+  background: var(--menu-hover) !important;
+  color: #fff !important;
+}

@@ -25,31 +25,6 @@ export interface ThemeColors {
 }
 
 export const THEMES: Record<string, ThemeColors> = {
-  dark: {
-    name: 'dark',
-    label: 'ダーク',
-    bg900: '#0c0e14',
-    bg800: '#12151e',
-    bg700: '#1a1e2e',
-    bg600: '#242940',
-    bg500: '#2e3552',
-    text400: '#4a5280',
-    text300: '#6b74a8',
-    text200: '#9ba3cc',
-    text100: '#c8cde6',
-    accent: '#7c6aef',
-    accentLight: '#9d8ff5',
-    accentGlow: 'rgba(124,106,239,0.3)',
-    success: '#10b981',
-    warning: '#f59e0b',
-    danger: '#ef4444',
-    barBg: '#1a1e2e',
-    barParentBg: '#2e3552',
-    gridLine: '#1a1e2e',
-    headerText: '#6b74a8',
-    subHeaderText: '#4a5280',
-    rowAlt: 'rgba(255,255,255,0.01)',
-  },
   light: {
     name: 'light',
     label: 'ライト',
@@ -74,6 +49,31 @@ export const THEMES: Record<string, ThemeColors> = {
     headerText: '#4a4f6e',
     subHeaderText: '#8b90a8',
     rowAlt: 'rgba(0,0,0,0.02)',
+  },
+  dark: {
+    name: 'dark',
+    label: 'ダーク',
+    bg900: '#0c0e14',
+    bg800: '#12151e',
+    bg700: '#1a1e2e',
+    bg600: '#242940',
+    bg500: '#2e3552',
+    text400: '#4a5280',
+    text300: '#6b74a8',
+    text200: '#9ba3cc',
+    text100: '#c8cde6',
+    accent: '#7c6aef',
+    accentLight: '#9d8ff5',
+    accentGlow: 'rgba(124,106,239,0.3)',
+    success: '#10b981',
+    warning: '#f59e0b',
+    danger: '#ef4444',
+    barBg: '#1a1e2e',
+    barParentBg: '#2e3552',
+    gridLine: '#1a1e2e',
+    headerText: '#6b74a8',
+    subHeaderText: '#4a5280',
+    rowAlt: 'rgba(255,255,255,0.01)',
   },
   pop: {
     name: 'pop',
@@ -136,7 +136,7 @@ export function loadTheme(): ThemeName {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
     if (saved && saved in THEMES) return saved as ThemeName;
   } catch (_e) { /* noop */ }
-  return 'dark';
+  return 'light';
 }
 
 export function saveTheme(name: ThemeName): void {
