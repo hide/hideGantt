@@ -215,7 +215,7 @@ export function updateTask(
 function recomputeProgressChain(tasks: Record<string, Task>, taskId: string): void {
   let currentId: string | null = taskId;
   while (currentId) {
-    const task = tasks[currentId];
+    const task: Task | undefined = tasks[currentId];
     if (!task) break;
     if (task.children.length > 0)
       task.progress = computeProgress(task, tasks);
