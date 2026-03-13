@@ -914,16 +914,24 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
 
               {/* Milestone diamonds */}
               {(() => {
-                const MIN_X_GAP = MIN_MILESTONE_X_GAP;
                 const sorted = milestones
-                  .map((m) => ({ ...m, mx: dateToDayOffset(m.date, state.timelineStartDate) * dayWidth }))
+                  .map((m) => {
+                    const mTasks = m.taskIds.map((id) => state.tasks[id]).filter(Boolean);
+                    const completedTasks = mTasks.filter((mt) => computeProgress(mt, state.tasks) >= 100).length;
+                    const totalTasks = mTasks.length;
+                    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+                    const label = `${m.title} (${progress}%)`;
+                    // Estimate text width: ~6px per char + diamond + padding
+                    const textWidth = label.length * 6 + 20;
+                    return { ...m, mx: dateToDayOffset(m.date, state.timelineStartDate) * dayWidth, label, progress, textWidth };
+                  })
                   .sort((a, b) => a.mx - b.mx);
                 const rowEnds: number[] = [];
                 const milestoneRows: { m: typeof sorted[0]; row: number }[] = [];
                 for (const m of sorted) {
                   let placed = false;
                   for (let r = 0; r < rowEnds.length; r++) {
-                    if (m.mx - rowEnds[r] >= MIN_X_GAP) {
+                    if (m.mx - rowEnds[r] >= m.textWidth) {
                       rowEnds[r] = m.mx;
                       milestoneRows.push({ m, row: r });
                       placed = true;
@@ -937,10 +945,9 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 }
                 return milestoneRows.map(({ m, row }) => {
                   const mTasks = m.taskIds.map((id) => state.tasks[id]).filter(Boolean);
-                  const completedTasks = mTasks.filter((mt) => computeProgress(mt, state.tasks) >= 100).length;
-                  const totalTasks = mTasks.length;
-                  const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
                   let mStatus: 'completed' | 'on-track' | 'at-risk' | 'behind' = 'on-track';
+                  const totalTasks = mTasks.length;
+                  const completedTasks = mTasks.filter((mt) => computeProgress(mt, state.tasks) >= 100).length;
                   if (totalTasks > 0 && completedTasks === totalTasks) mStatus = 'completed';
                   else if (totalTasks > 0) {
                     const statuses = mTasks.map((mt) => getTaskStatus(mt, state.tasks));
@@ -954,7 +961,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       <line x1={m.mx} y1={0} x2={m.mx} y2={rows.length * ROW_HEIGHT} stroke={theme.text400} strokeWidth={1} strokeDasharray="6,3" opacity={0.3} />
                       <g transform={`translate(${m.mx}, ${baseY})`}>
                         <rect x={-5} y={-5} width={10} height={10} fill={diamondColor} transform="rotate(45)" style={{ transformOrigin: '0 0' }} />
-                        <text x={10} y={4} fill={theme.text100} fontSize={10} fontWeight={600}>{m.title} ({progress}%)</text>
+                        <text x={10} y={4} fill={theme.text100} fontSize={10} fontWeight={600}>{m.label}</text>
                       </g>
                     </g>
                   );
@@ -994,9 +1001,9 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 const hasChildren = task.children.length > 0;
                 const isLeafChild = !hasChildren && depth > 0;
 
-                // Leaf children get thinner bars
-                const y = isLeafChild ? index * ROW_HEIGHT + 14 : index * ROW_HEIGHT + 8;
-                const barHeight = isLeafChild ? ROW_HEIGHT - 28 : ROW_HEIGHT - 16;
+                // Leaf children get slightly thinner bars
+                const y = isLeafChild ? index * ROW_HEIGHT + 10 : index * ROW_HEIGHT + 8;
+                const barHeight = isLeafChild ? ROW_HEIGHT - 20 : ROW_HEIGHT - 16;
 
                 const taskProgress = computeProgress(task, state.tasks);
                 const status = getTaskStatus(task, state.tasks);
@@ -1046,9 +1053,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       );
                     })()}
                     {width > 60 && (
-                      <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 9 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
+                      <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 10 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
                         {task.title.length > Math.floor(width / 7) ? task.title.slice(0, Math.floor(width / 7)) + '…' : task.title}
                       </text>
+                    )}
+                    {taskProgress >= 100 && width > 10 && (
+                      <line x1={x - 4} y1={y + barHeight / 2} x2={x + width + 4} y2={y + barHeight / 2}
+                        stroke={theme.text100} strokeWidth={1.5} opacity={0.5} style={{ pointerEvents: 'none' }} />
                     )}
                     {!readOnly && (
                       <rect x={x + width - 6} y={y} width={6} height={barHeight} fill="transparent" style={{ cursor: 'ew-resize' }}
