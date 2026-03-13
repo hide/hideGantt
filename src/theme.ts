@@ -129,7 +129,7 @@ export const THEMES: Record<string, ThemeColors> = {
 
 export type ThemeName = keyof typeof THEMES;
 
-const THEME_STORAGE_KEY = 'gantt-app-theme';
+const THEME_STORAGE_KEY = 'hideGantt-theme';
 
 export function loadTheme(): ThemeName {
   try {

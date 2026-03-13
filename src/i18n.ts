@@ -1,6 +1,6 @@
 export type Lang = 'ja' | 'en';
 
-const LANG_STORAGE_KEY = 'gantt-app-lang';
+const LANG_STORAGE_KEY = 'hideGantt-lang';
 
 export function loadLang(): Lang {
   try {

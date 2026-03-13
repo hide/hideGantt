@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { GanttState, Task, Project, Milestone, Person, Category } from './types';
 import { computeProgress, MAX_TASK_DEPTH } from './types';
 
-const STORAGE_KEY = 'gantt-app-state';
+const STORAGE_KEY = 'hideGantt-state';
 
 function createDefaultState(): GanttState {
   const projectId = uuidv4();
