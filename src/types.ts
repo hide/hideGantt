@@ -69,6 +69,7 @@ export interface GanttState {
   sidebarFilterId: string | null;
   editingItemId: string | null;
   editingItemType: SidebarSection | null;
+  hiddenGroupIds: string[];
 }
 
 /** Compute progress recursively: leaf tasks use stored progress, parent tasks average children */

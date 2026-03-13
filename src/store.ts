@@ -34,6 +34,7 @@ function createDefaultState(): GanttState {
     sidebarFilterId: null,
     editingItemId: null,
     editingItemType: null,
+    hiddenGroupIds: [],
   };
 }
 

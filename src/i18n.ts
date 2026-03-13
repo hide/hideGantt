@@ -36,6 +36,8 @@ const translations = {
   'menu.language': { ja: '言語', en: 'Language' },
   'menu.gantt': { ja: 'ガントチャート', en: 'Gantt Chart' },
   'menu.dashboard': { ja: 'ダッシュボード', en: 'Dashboard' },
+  'group.show': { ja: '表示する', en: 'Show' },
+  'group.hide': { ja: '非表示にする', en: 'Hide' },
 
   // Theme names
   'theme.dark': { ja: 'ダーク', en: 'Dark' },

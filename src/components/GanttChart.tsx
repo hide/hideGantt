@@ -113,6 +113,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const [taskListWidth, setTaskListWidth] = useState(TASK_LIST_DEFAULT_WIDTH);
   const resizingTaskListRef = useRef(false);
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [groupMenuId, setGroupMenuId] = useState<string | null>(null);
+  const groupMenuRef = useRef<HTMLDivElement>(null);
   const [sectionMenuOpen, setSectionMenuOpen] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [milestoneDate, setMilestoneDate] = useState('');
@@ -121,6 +123,15 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const projectId = state.activeProjectId;
   const sidebarSection = state.sidebarSection ?? 'projects';
 
+  // Per-section task list width
+  const taskListWidthsRef = useRef<Record<string, number>>({});
+  const sidebarSectionRef = useRef(sidebarSection);
+  sidebarSectionRef.current = sidebarSection;
+  const resizePendingRef = useRef(TASK_LIST_DEFAULT_WIDTH);
+  useEffect(() => {
+    setTaskListWidth(taskListWidthsRef.current[sidebarSection] ?? TASK_LIST_DEFAULT_WIDTH);
+  }, [sidebarSection]);
+
   const COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#f97316', '#84cc16'];
   const pickColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
@@ -128,11 +139,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const sectionLabelKeys: Record<SidebarSection, string> = { projects: 'section.projects', people: 'section.people', categories: 'section.categories', milestones: 'section.milestones' };
   const addPlaceholderKeys: Record<SidebarSection, string> = { projects: 'add.project', people: 'add.person', categories: 'add.category', milestones: 'add.milestone' };
 
-  // Close section menu on outside click
+  // Close section menu / group menu on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (sectionMenuRef.current && !sectionMenuRef.current.contains(e.target as Node))
         setSectionMenuOpen(false);
+      if (groupMenuRef.current && !groupMenuRef.current.contains(e.target as Node))
+        setGroupMenuId(null);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -161,7 +174,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   };
 
   // Build flat rows: group headers + tasks, grouped by current sidebar section
-  const { rows, allTasks: tasks } = useMemo(() => {
+  const { listRows, rows, allTasks: tasks } = useMemo(() => {
     const result: GanttRow[] = [];
     const allTasks: Task[] = [];
 
@@ -246,7 +259,27 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
       }
     }
 
-    return { rows: result, allTasks };
+    // Filter out hidden groups and their tasks
+    const hiddenIds = new Set(state.hiddenGroupIds ?? []);
+    const listRows: GanttRow[] = []; // Left panel: group headers always shown
+    const chartRows: GanttRow[] = []; // Right panel: hidden groups fully removed
+    const filteredTasks: Task[] = [];
+    let hidden = false;
+    for (const row of result) {
+      if (row.kind === 'group') {
+        hidden = hiddenIds.has(row.id);
+        listRows.push(row); // Always show in left panel
+        if (!hidden) chartRows.push(row);
+        continue;
+      }
+      if (!hidden) {
+        listRows.push(row);
+        chartRows.push(row);
+        filteredTasks.push(row.task);
+      }
+    }
+
+    return { listRows, rows: chartRows, allTasks: filteredTasks };
   }, [state, sidebarSection, t]);
 
   // Track container size for auto-fit (skip updates while resizing task list)
@@ -346,6 +379,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
       if (!resizingTaskListRef.current) return;
       const delta = e.clientX - resizeStartXRef.current;
       const newWidth = Math.min(TASK_LIST_MAX_WIDTH, Math.max(TASK_LIST_MIN_WIDTH, resizeStartWidthRef.current + delta));
+      resizePendingRef.current = newWidth;
       setTaskListWidth(newWidth);
     };
     const onMouseUp = () => {
@@ -353,6 +387,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
         resizingTaskListRef.current = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        // Save width for current section
+        taskListWidthsRef.current[sidebarSectionRef.current] = resizePendingRef.current;
       }
     };
     document.addEventListener('mousemove', onMouseMove);
@@ -557,22 +593,24 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
 
           {/* Task rows */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
-            {rows.map((row, index) => {
+            {listRows.map((row, index) => {
               if (row.kind === 'group') {
                 const isUncategorized = row.id === '__uncategorized';
                 const isDragging = dragGroupId === row.id;
                 const isDropTarget = dropTargetGroupId === row.id;
+                const isHidden = (state.hiddenGroupIds ?? []).includes(row.id);
                 return (
                   <div
                     key={`group-${index}`}
-                    className="flex items-center px-3 font-semibold text-xs tracking-wide cursor-pointer menu-item"
+                    className="flex items-center px-3 font-semibold text-xs tracking-wide cursor-pointer relative"
                     style={{
                       height: ROW_HEIGHT,
-                      '--menu-hover': row.color + '88',
+                      background: row.color + '30',
                       borderBottom: `1px solid ${theme.bg700}`,
                       borderTop: isDropTarget ? `2px solid ${theme.accent}` : '2px solid transparent',
                       color: row.color,
                       opacity: isDragging ? 0.4 : 1,
+                      zIndex: groupMenuId === row.id ? 50 : undefined,
                     } as React.CSSProperties}
                     onClick={() => {
                       if (isUncategorized) return;
@@ -588,7 +626,37 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     {!readOnly && !isUncategorized && (
                       <span className="mr-2 cursor-grab text-[10px] opacity-50">⋮⋮</span>
                     )}
-                    {row.label}
+                    <span className="flex-1 truncate" style={{ opacity: isHidden ? 0.4 : 1 }}>{row.label}</span>
+                    {/* Group visibility menu */}
+                    <div ref={groupMenuId === row.id ? groupMenuRef : undefined} className="relative ml-auto shrink-0">
+                      <button
+                        className="px-1 rounded text-[10px] opacity-50 hover:opacity-100"
+                        style={{ color: row.color }}
+                        onClick={(e) => { e.stopPropagation(); setGroupMenuId(groupMenuId === row.id ? null : row.id); }}
+                      >▼</button>
+                      {groupMenuId === row.id && (
+                        <div
+                          className="absolute right-0 top-full z-40 rounded py-1 shadow-lg"
+                          style={{ background: theme.bg700, border: `1px solid ${theme.bg500}`, minWidth: 120, '--menu-hover': theme.accent } as React.CSSProperties}
+                        >
+                          <button
+                            className="w-full px-3 py-1.5 text-left text-xs menu-item"
+                            style={{ color: theme.text200 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const hidden = state.hiddenGroupIds ?? [];
+                              const next = isHidden
+                                ? hidden.filter((id) => id !== row.id)
+                                : [...hidden, row.id];
+                              setState({ ...state, hiddenGroupIds: next });
+                              setGroupMenuId(null);
+                            }}
+                          >
+                            {isHidden ? t('group.show' as any) : t('group.hide' as any)}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               }
@@ -656,17 +724,19 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     </span>
                   ))}
 
-                  <div className="flex -space-x-1 mr-2 shrink-0">
-                    {task.assigneeIds.slice(0, 3).map((aid) => {
-                      const person = state.people[aid];
-                      if (!person) return null;
-                      return (
-                        <div key={aid} className={`${depth > 0 ? 'w-4 h-4 text-[7px]' : 'w-5 h-5 text-[8px]'} rounded-full flex items-center justify-center font-bold text-white`} style={{ background: person.color, border: `1px solid ${theme.bg800}` }} title={person.name}>
-                          {person.avatar}
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {sidebarSection !== 'people' && (
+                    <div className="flex -space-x-1 mr-2 shrink-0">
+                      {task.assigneeIds.slice(0, 3).map((aid) => {
+                        const person = state.people[aid];
+                        if (!person) return null;
+                        return (
+                          <div key={aid} className={`${depth > 0 ? 'w-4 h-4 text-[7px]' : 'w-5 h-5 text-[8px]'} rounded-full flex items-center justify-center font-bold text-white`} style={{ background: person.color, border: `1px solid ${theme.bg800}` }} title={person.name}>
+                            {person.avatar}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <span className="text-[10px] font-medium w-8 text-right shrink-0" style={{ color: statusColor }}>{taskProgress}%</span>
 
@@ -878,12 +948,29 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 </marker>
               </defs>
 
-              {/* Grid rows */}
+              {/* Grid row backgrounds (task rows only) */}
               {rows.map((row, i) => (
-                <g key={`row-${i}`}>
-                  <rect x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
-                    fill={row.kind === 'group' ? (row.color + '30') : (i % 2 === 0 ? 'transparent' : theme.rowAlt)} />
-                  {row.kind === 'group' && (
+                row.kind !== 'group' ? (
+                  <rect key={`row-${i}`} x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
+                    fill={i % 2 === 0 ? 'transparent' : theme.rowAlt} />
+                ) : null
+              ))}
+
+              {/* Grid columns */}
+              {headers.flatMap((group) =>
+                group.subLabels.map((sub) => (
+                  <line key={`grid-${sub.dayOffset}`} x1={sub.dayOffset * dayWidth} y1={0} x2={sub.dayOffset * dayWidth} y2={rows.length * ROW_HEIGHT} stroke={theme.gridLine} strokeWidth={1} />
+                ))
+              )}
+
+              {/* Group row overlays (drawn over grid columns to hide them) */}
+              {rows.map((row, i) => (
+                row.kind === 'group' ? (
+                  <g key={`group-overlay-${i}`}>
+                    <rect x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
+                      fill={theme.bg800} />
+                    <rect x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
+                      fill={row.color + '30'} />
                     <text
                       x={8}
                       y={i * ROW_HEIGHT + ROW_HEIGHT / 2}
@@ -896,16 +983,9 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     >
                       {row.label}
                     </text>
-                  )}
-                </g>
+                  </g>
+                ) : null
               ))}
-
-              {/* Grid columns */}
-              {headers.flatMap((group) =>
-                group.subLabels.map((sub) => (
-                  <line key={`grid-${sub.dayOffset}`} x1={sub.dayOffset * dayWidth} y1={0} x2={sub.dayOffset * dayWidth} y2={rows.length * ROW_HEIGHT} stroke={theme.gridLine} strokeWidth={1} />
-                ))
-              )}
 
               {/* Today line */}
               {todayOffset >= 0 && todayOffset <= totalDays && (
@@ -987,6 +1067,29 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     <path key={`dep-${rowIndex}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} fill="none" stroke={theme.accent} strokeWidth={1.5} opacity={0.4} markerEnd="url(#arrowhead)" />
                   );
                 });
+              })}
+
+              {/* Subtask region backgrounds */}
+              {rows.map((row, index) => {
+                if (row.kind !== 'task') return null;
+                const task = row.task;
+                if (task.children.length === 0) return null;
+                const childIndices = rows
+                  .map((r, ri) => r.kind === 'task' && task.children.includes(r.task.id) ? ri : -1)
+                  .filter((ri) => ri >= 0);
+                if (childIndices.length === 0) return null;
+                const firstChildIdx = childIndices[0];
+                const lastChildIdx = childIndices[childIndices.length - 1];
+                const firstChild = rows[firstChildIdx] as { kind: 'task'; task: Task; depth: number };
+                const lastChild = rows[lastChildIdx] as { kind: 'task'; task: Task; depth: number };
+                const bgX = dateToDayOffset(firstChild.task.startDate, state.timelineStartDate) * dayWidth;
+                const bgW = dateToDayOffset(lastChild.task.endDate, state.timelineStartDate) * dayWidth - bgX;
+                const bgY = index * ROW_HEIGHT + ROW_HEIGHT;
+                const bgH = (lastChildIdx - index) * ROW_HEIGHT;
+                return (
+                  <rect key={`subtask-bg-${index}`} x={bgX} y={bgY} width={bgW} height={bgH}
+                    rx={4} fill={theme.text400} opacity={0.18} style={{ pointerEvents: 'none' }} />
+                );
               })}
 
               {/* Task bars */}
