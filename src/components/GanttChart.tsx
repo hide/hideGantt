@@ -17,7 +17,8 @@ interface GanttChartProps {
   readOnly: boolean;
 }
 
-const ROW_HEIGHT = 40;
+const ROW_HEIGHT_DEFAULT = 40;
+const ROW_HEIGHT_MIN = 24;
 const HEADER_HEIGHT = 60;
 const TASK_LIST_DEFAULT_WIDTH = 320;
 const TASK_LIST_MIN_WIDTH = 180;
@@ -111,6 +112,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const [dragReorder, setDragReorder] = useState<{ taskId: string; startY: number; currentIndex: number } | null>(null);
   const [taskListWidth, setTaskListWidth] = useState(TASK_LIST_DEFAULT_WIDTH);
   const resizingTaskListRef = useRef(false);
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [sectionMenuOpen, setSectionMenuOpen] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [milestoneDate, setMilestoneDate] = useState('');
@@ -247,27 +249,33 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     return { rows: result, allTasks };
   }, [state, sidebarSection, t]);
 
-  // Track container width for auto-fit
+  // Track container size for auto-fit (skip updates while resizing task list)
   const [containerWidth, setContainerWidth] = useState(800);
+  const [containerHeight, setContainerHeight] = useState(600);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
-      for (const entry of entries)
+      if (resizingTaskListRef.current) return;
+      for (const entry of entries) {
         setContainerWidth(entry.contentRect.width);
+        setContainerHeight(entry.contentRect.height);
+      }
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
   const totalDays = Math.max(1, dateToDayOffset(state.timelineEndDate, state.timelineStartDate));
-  // dayWidth is computed so the full date range fits the container
-  const dayWidth = Math.max(1, containerWidth / totalDays);
-  const chartWidth = containerWidth;
-
-  // Auto-select header granularity based on dayWidth
-  const autoZoom: 'day' | 'week' | 'month' = dayWidth >= 25 ? 'day' : dayWidth >= 8 ? 'week' : 'month';
-  const headers = generateDateHeaders(state.timelineStartDate, state.timelineEndDate, autoZoom, dayWidth);
+  // Fixed dayWidth based on zoom level; content may exceed container → horizontal scroll
+  const baseDayWidth = state.zoomLevel === 'day' ? 40 : state.zoomLevel === 'week' ? 16 : 5;
+  const { dayWidth, chartWidth, autoZoom, headers } = useMemo(() => {
+    const dw = Math.max(baseDayWidth, containerWidth / totalDays);
+    const cw = Math.max(containerWidth, totalDays * dw);
+    const az: 'day' | 'week' | 'month' = dw >= 25 ? 'day' : dw >= 8 ? 'week' : 'month';
+    const hd = generateDateHeaders(state.timelineStartDate, state.timelineEndDate, az, dw);
+    return { dayWidth: dw, chartWidth: cw, autoZoom: az, headers: hd };
+  }, [containerWidth, totalDays, baseDayWidth, state.timelineStartDate, state.timelineEndDate]);
   const milestones = Object.values(state.milestones);
   const todayOffset = dateToDayOffset(new Date().toISOString().split('T')[0], state.timelineStartDate);
 
@@ -293,6 +301,12 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     return rowEnds.length;
   }, [milestones, state.timelineStartDate, dayWidth]);
   const milestoneAreaHeight = milestoneRowCount > 0 ? milestoneRowCount * MILESTONE_ROW_HEIGHT + 16 : 0;
+
+  // Dynamic ROW_HEIGHT: fit all rows vertically within container
+  const availableHeight = containerHeight - HEADER_HEIGHT - milestoneAreaHeight;
+  const ROW_HEIGHT = rows.length > 0
+    ? Math.max(ROW_HEIGHT_MIN, Math.min(ROW_HEIGHT_DEFAULT, Math.floor(availableHeight / rows.length)))
+    : ROW_HEIGHT_DEFAULT;
 
 
   const handleMouseMove = useCallback(
@@ -330,10 +344,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!resizingTaskListRef.current) return;
-      const chartArea = scrollRef.current?.parentElement;
-      if (!chartArea) return;
-      const rect = chartArea.getBoundingClientRect();
-      const newWidth = Math.min(TASK_LIST_MAX_WIDTH, Math.max(TASK_LIST_MIN_WIDTH, e.clientX - rect.left));
+      const delta = e.clientX - resizeStartXRef.current;
+      const newWidth = Math.min(TASK_LIST_MAX_WIDTH, Math.max(TASK_LIST_MIN_WIDTH, resizeStartWidthRef.current + delta));
       setTaskListWidth(newWidth);
     };
     const onMouseUp = () => {
@@ -348,8 +360,12 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     return () => { document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); };
   }, []);
 
-  const startTaskListResize = () => {
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(0);
+  const startTaskListResize = (e: React.MouseEvent) => {
     resizingTaskListRef.current = true;
+    resizeStartXRef.current = e.clientX;
+    resizeStartWidthRef.current = taskListWidth;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   };
@@ -771,18 +787,63 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
           {/* Resize handle */}
           <div
             onMouseDown={startTaskListResize}
-            className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize z-10"
+            className="absolute top-0 right-0 h-full cursor-col-resize z-10"
+            style={{ width: 8, marginRight: -4 }}
           >
-            <div className="w-px h-full ml-auto" style={{ background: theme.bg600 }} />
+            <div className="w-px h-full mx-auto" style={{ background: theme.bg600 }} />
           </div>
         </div>
 
         {/* Timeline */}
-        <div ref={scrollRef} className="flex-1 overflow-auto">
-          <div style={{ width: '100%', minHeight: HEADER_HEIGHT + rows.length * ROW_HEIGHT + milestoneAreaHeight }}>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Date range controls */}
+          <div className="shrink-0 flex items-center gap-3 px-3" style={{ height: 36, background: theme.bg800, borderBottom: `1px solid ${theme.bg700}` }}>
+            <div className="flex items-center gap-1.5" style={{ height: 24 }}>
+              <input
+                type="date"
+                value={state.timelineStartDate}
+                onChange={(e) => { if (e.target.value) setState({ ...state, timelineStartDate: e.target.value }); }}
+                className="text-xs px-1.5 rounded"
+                style={{ background: theme.bg700, color: theme.text200, border: `1px solid ${theme.bg600}`, height: 24 }}
+              />
+              <span className="text-xs" style={{ color: theme.text400 }}>–</span>
+              <input
+                type="date"
+                value={state.timelineEndDate}
+                onChange={(e) => { if (e.target.value) setState({ ...state, timelineEndDate: e.target.value }); }}
+                className="text-xs px-1.5 rounded"
+                style={{ background: theme.bg700, color: theme.text200, border: `1px solid ${theme.bg600}`, height: 24 }}
+              />
+            </div>
+            <div className="flex items-center gap-0.5" style={{ height: 24 }}>
+              <button
+                onClick={() => {
+                  const d = new Date(state.timelineEndDate);
+                  d.setMonth(d.getMonth() - 1);
+                  if (d > new Date(state.timelineStartDate))
+                    setState({ ...state, timelineEndDate: d.toISOString().split('T')[0] });
+                }}
+                className="text-xs px-2 rounded font-bold"
+                style={{ background: theme.bg700, color: theme.text300, border: `1px solid ${theme.bg600}`, height: 24 }}
+                title="End date −1 month"
+              >−</button>
+              <button
+                onClick={() => {
+                  const d = new Date(state.timelineEndDate);
+                  d.setMonth(d.getMonth() + 1);
+                  setState({ ...state, timelineEndDate: d.toISOString().split('T')[0] });
+                }}
+                className="text-xs px-2 rounded font-bold"
+                style={{ background: theme.bg700, color: theme.text300, border: `1px solid ${theme.bg600}`, height: 24 }}
+                title="End date +1 month"
+              >+</button>
+            </div>
+          </div>
+          <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden">
+          <div style={{ width: chartWidth, minHeight: HEADER_HEIGHT + rows.length * ROW_HEIGHT + milestoneAreaHeight }}>
             {/* Header */}
             <div className="sticky top-0 z-10" style={{ height: HEADER_HEIGHT, background: theme.bg800, borderBottom: `1px solid ${theme.bg600}` }}>
-              <svg width="100%" height={HEADER_HEIGHT}>
+              <svg width={chartWidth} height={HEADER_HEIGHT}>
                 {(() => {
                   let x = 0;
                   return headers.map((group, gi) => {
@@ -810,7 +871,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             </div>
 
             {/* Grid + Bars */}
-            <svg width="100%" height={rows.length * ROW_HEIGHT + milestoneAreaHeight} style={{ display: 'block' }}>
+            <svg width={chartWidth} height={rows.length * ROW_HEIGHT + milestoneAreaHeight} style={{ display: 'block' }}>
               <defs>
                 <marker id="arrowhead" markerWidth={8} markerHeight={6} refX={8} refY={3} orient="auto">
                   <polygon points="0 0, 8 3, 0 6" fill={theme.accent} opacity={0.6} />
@@ -943,7 +1004,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
 
                 return (
                   <g key={`bar-${index}`}>
-                    <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 2 : isLeafChild ? 4 : 6}
+                    <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
                       fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
                       stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
                       style={{ cursor: readOnly ? 'pointer' : 'grab' }}
@@ -953,14 +1014,37 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                         e.preventDefault();
                         setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
                       }}
+                      onMouseEnter={(e) => { if (width <= 60) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                      onMouseMove={(e) => { if (width <= 60 && tooltip) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                      onMouseLeave={() => setTooltip(null)}
                     />
-                    <rect x={x} y={y} width={Math.max(width * (taskProgress / 100), 0)} height={barHeight} rx={hasChildren ? 2 : isLeafChild ? 4 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
-                    {hasChildren && (
-                      <>
-                        <rect x={x} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
-                        <rect x={x + width - 6} y={y + barHeight - 4} width={6} height={4} fill={theme.text400} />
-                      </>
-                    )}
+                    <rect x={x} y={y} width={Math.max(width * (taskProgress / 100), 0)} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                    {hasChildren && (() => {
+                      // Find first and last child task rows
+                      const childIndices = rows
+                        .map((r, ri) => r.kind === 'task' && task.children.includes(r.task.id) ? ri : -1)
+                        .filter((ri) => ri >= 0);
+                      if (childIndices.length === 0) return null;
+                      const firstChildIdx = childIndices[0];
+                      const lastChildIdx = childIndices[childIndices.length - 1];
+                      const firstChild = rows[firstChildIdx] as { kind: 'task'; task: Task; depth: number };
+                      const lastChild = rows[lastChildIdx] as { kind: 'task'; task: Task; depth: number };
+                      const fcStartX = dateToDayOffset(firstChild.task.startDate, state.timelineStartDate) * dayWidth;
+                      const lcEndX = dateToDayOffset(lastChild.task.endDate, state.timelineStartDate) * dayWidth;
+                      const fcY = firstChildIdx * ROW_HEIGHT + ROW_HEIGHT / 2;
+                      const lcY = lastChildIdx * ROW_HEIGHT + ROW_HEIGHT / 2;
+                      const circleCy = y + barHeight - 1;
+                      return (
+                        <>
+                          <circle cx={fcStartX} cy={circleCy} r={3} fill={theme.text400} />
+                          <circle cx={lcEndX} cy={circleCy} r={3} fill={theme.text400} />
+                          <line x1={fcStartX} y1={circleCy} x2={fcStartX} y2={fcY}
+                            stroke={theme.text400} strokeWidth={1} strokeDasharray="3,3" opacity={0.5} style={{ pointerEvents: 'none' }} />
+                          <line x1={lcEndX} y1={circleCy} x2={lcEndX} y2={lcY}
+                            stroke={theme.text400} strokeWidth={1} strokeDasharray="3,3" opacity={0.5} style={{ pointerEvents: 'none' }} />
+                        </>
+                      );
+                    })()}
                     {width > 60 && (
                       <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 9 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
                         {task.title.length > Math.floor(width / 7) ? task.title.slice(0, Math.floor(width / 7)) + '…' : task.title}
@@ -977,7 +1061,23 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             </svg>
           </div>
         </div>
+        </div>
       </div>
+      {tooltip && (
+        <div
+          className="fixed z-50 px-2 py-1 rounded text-xs font-medium shadow-lg pointer-events-none"
+          style={{
+            left: tooltip.x + 10,
+            top: tooltip.y - 30,
+            background: theme.bg600,
+            color: theme.text100,
+            border: `1px solid ${theme.bg500}`,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {tooltip.text}
+        </div>
+      )}
     </div>
   );
 }
