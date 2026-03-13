@@ -819,8 +819,24 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
 
               {/* Grid rows */}
               {rows.map((row, i) => (
-                <rect key={i} x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
-                  fill={row.kind === 'group' ? (row.color + '18') : (i % 2 === 0 ? 'transparent' : theme.rowAlt)} />
+                <g key={`row-${i}`}>
+                  <rect x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
+                    fill={row.kind === 'group' ? (row.color + '30') : (i % 2 === 0 ? 'transparent' : theme.rowAlt)} />
+                  {row.kind === 'group' && (
+                    <text
+                      x={8}
+                      y={i * ROW_HEIGHT + ROW_HEIGHT / 2}
+                      dominantBaseline="central"
+                      fill={row.color}
+                      opacity={0.7}
+                      fontSize={13}
+                      fontWeight={600}
+                      style={{ userSelect: 'none', pointerEvents: 'none' }}
+                    >
+                      {row.label}
+                    </text>
+                  )}
+                </g>
               ))}
 
               {/* Grid columns */}
