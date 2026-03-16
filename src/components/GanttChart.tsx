@@ -178,8 +178,30 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     const result: GanttRow[] = [];
     const allTasks: Task[] = [];
 
-    const addTaskRows = (taskList: Task[]) => {
+    const isVisible = (t: Task): boolean => {
+      const inRange = t.startDate <= state.timelineEndDate && t.endDate >= state.timelineStartDate;
+      if (inRange) return true;
+      // Before the range and incomplete → still visible (ongoing work)
+      if (t.endDate < state.timelineStartDate && computeProgress(t, state.tasks) < 100) return true;
+      return false;
+    };
+
+    const hasVisibleDescendant = (t: Task, filterPersonId?: string): boolean => {
+      const children = t.children.map((id) => state.tasks[id]).filter(Boolean);
+      if (filterPersonId)
+        return children.some((c) =>
+          (hasDescendantWithAssignee(state, c.id, filterPersonId) && isVisible(c)) ||
+          hasVisibleDescendant(c, filterPersonId)
+        );
+      return children.some((c) => isVisible(c) || hasVisibleDescendant(c));
+    };
+
+    const addTaskRows = (taskList: Task[], filterPersonId?: string) => {
       for (const task of taskList) {
+        // Skip parent tasks if no children are visible
+        if (filterPersonId && task.children.length > 0 && !hasVisibleDescendant(task, filterPersonId))
+          continue;
+
         allTasks.push(task);
         const depth = getTaskDepth(state, task.id);
         result.push({ kind: 'task', task, depth });
@@ -190,6 +212,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             const children = parentTask.children
               .map((id) => state.tasks[id])
               .filter(Boolean)
+              .filter((c) => !filterPersonId || hasDescendantWithAssignee(state, c.id, filterPersonId))
               .sort((a, b) => a.order - b.order);
             for (const child of children) {
               allTasks.push(child);
@@ -225,7 +248,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             .filter((t) => !t.parentId && hasDescendantWithAssignee(state, t.id, p.id))
             .sort((a, b) => a.order - b.order);
           result.push({ kind: 'group', id: p.id, label: p.name, color: p.color });
-          addTaskRows(pTasks);
+          addTaskRows(pTasks, p.id);
         }
         break;
       }
@@ -249,7 +272,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
         break;
       }
       case 'milestones': {
-        const mils = Object.values(state.milestones).sort((a, b) => a.order - b.order);
+        const mils = Object.values(state.milestones).sort((a, b) => a.date.localeCompare(b.date));
         for (const m of mils) {
           const mTasks = m.taskIds.map((id) => state.tasks[id]).filter(Boolean).sort((a, b) => a.order - b.order);
           result.push({ kind: 'group', id: m.id, label: m.title, color: m.color });
@@ -627,6 +650,17 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       <span className="mr-2 cursor-grab text-[10px] opacity-50">⋮⋮</span>
                     )}
                     <span className="flex-1 truncate" style={{ opacity: isHidden ? 0.4 : 1 }}>{row.label}</span>
+                    {sidebarSection === 'milestones' && state.milestones[row.id] && (() => {
+                      const m = state.milestones[row.id];
+                      const total = m.taskIds.length;
+                      const done = m.taskIds.filter((id) => state.tasks[id] && computeProgress(state.tasks[id], state.tasks) >= 100).length;
+                      const pct = total > 0 ? Math.round(done / total * 100) : 0;
+                      return (
+                        <span className="text-[10px] font-medium mr-1 shrink-0" style={{ color: done === total && total > 0 ? theme.success : theme.text400 }}>
+                          {pct}% ({done}/{total})
+                        </span>
+                      );
+                    })()}
                     {/* Group visibility menu */}
                     <div ref={groupMenuId === row.id ? groupMenuRef : undefined} className="relative ml-auto shrink-0">
                       <button
@@ -718,13 +752,13 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     textDecoration: taskProgress >= 100 ? 'line-through' : 'none',
                   }}>{task.title}</span>
 
-                  {depth === 0 && categories.map((cat) => (
+                  {depth === 0 && sidebarSection !== 'milestones' && categories.map((cat) => (
                     <span key={cat.id} className="text-[9px] px-1.5 py-0.5 rounded font-medium mr-1 shrink-0" style={{ background: cat.color + '33', color: cat.color }}>
                       {cat.name}
                     </span>
                   ))}
 
-                  {sidebarSection !== 'people' && (
+                  {sidebarSection !== 'people' && sidebarSection !== 'milestones' && (
                     <div className="flex -space-x-1 mr-2 shrink-0">
                       {task.assigneeIds.slice(0, 3).map((aid) => {
                         const person = state.people[aid];

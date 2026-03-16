@@ -278,6 +278,7 @@ export function Sidebar({ state, setState, readOnly }: SidebarProps) {
         {section === 'milestones' &&
           Object.values(state.milestones)
             .filter((m) => m.projectId === state.activeProjectId)
+            .sort((a, b) => a.date.localeCompare(b.date))
             .map((m) => {
               const isExpanded = expandedIds.has(m.id);
               const tasks = isExpanded ? getTasksForItem(m.id) : [];

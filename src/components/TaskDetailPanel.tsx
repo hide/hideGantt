@@ -193,7 +193,7 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
               className="w-full"
             >
               <option value="">{t('detail.none')}</option>
-              {Object.values(state.milestones).filter((m) => m.projectId === state.activeProjectId).map((m) => (
+              {Object.values(state.milestones).sort((a, b) => a.date.localeCompare(b.date)).map((m) => (
                 <option key={m.id} value={m.id}>{m.title} ({m.date})</option>
               ))}
             </select>
