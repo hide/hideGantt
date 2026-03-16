@@ -82,6 +82,22 @@ export function TaskDetailPanel({ state, setState, taskId, onClose, readOnly }: 
           </div>
         </div>
 
+        {/* Actual Dates */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={labelStyle}>{t('detail.actualStartDate' as any)}</label>
+            {readOnly ? <p className="text-sm">{task.actualStartDate || '—'}</p> : (
+              <input type="date" value={task.actualStartDate ?? ''} onChange={(e) => update({ actualStartDate: e.target.value || null })} className="w-full" />
+            )}
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={labelStyle}>{t('detail.actualEndDate' as any)}</label>
+            {readOnly ? <p className="text-sm">{task.actualEndDate || '—'}</p> : (
+              <input type="date" value={task.actualEndDate ?? ''} onChange={(e) => update({ actualEndDate: e.target.value || null })} className="w-full" />
+            )}
+          </div>
+        </div>
+
         {/* Progress */}
         <div>
           <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={labelStyle}>{t('detail.progress')}: {taskProgress}%</label>

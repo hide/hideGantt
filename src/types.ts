@@ -29,6 +29,8 @@ export interface Task {
   parentId: string | null;
   children: string[]; // child task IDs
   milestoneId: string | null;
+  actualStartDate: string | null;
+  actualEndDate: string | null;
   order: number;
   collapsed: boolean;
 }

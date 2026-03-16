@@ -60,6 +60,8 @@ export function loadState(): GanttState {
         if (!task.children) task.children = [];
         if (task.parentId === undefined) task.parentId = null;
         if (task.collapsed === undefined) task.collapsed = false;
+        if (task.actualStartDate === undefined) task.actualStartDate = null;
+        if (task.actualEndDate === undefined) task.actualEndDate = null;
         (merged.tasks as Record<string, Task>)[id] = task;
       }
 
@@ -84,6 +86,8 @@ export function loadState(): GanttState {
             parentId: parent.id,
             children: [],
             milestoneId: null,
+            actualStartDate: null,
+            actualEndDate: null,
             order: i,
             collapsed: false,
           };
@@ -172,6 +176,8 @@ export function createTask(
     parentId: partial.parentId ?? null,
     children: [],
     milestoneId: partial.milestoneId ?? null,
+    actualStartDate: partial.actualStartDate ?? null,
+    actualEndDate: partial.actualEndDate ?? null,
     order: siblingCount,
     collapsed: false,
   };

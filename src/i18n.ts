@@ -106,6 +106,8 @@ const translations = {
   'detail.subtasks': { ja: '子タスク', en: 'Child Tasks' },
   'detail.addSubtask': { ja: '子タスク名を入力...', en: 'Enter child task name...' },
   'detail.markDone': { ja: '完了にする', en: 'Mark as done' },
+  'detail.actualStartDate': { ja: '実績開始日', en: 'Actual start date' },
+  'detail.actualEndDate': { ja: '実績終了日', en: 'Actual end date' },
   'detail.deleteTask': { ja: 'タスクを削除', en: 'Delete task' },
 
   // Delete by type

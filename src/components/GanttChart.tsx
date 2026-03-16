@@ -1069,7 +1069,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 });
               })}
 
-              {/* Subtask region backgrounds */}
+              {/* Subtask region backgrounds (split at group boundaries) */}
               {rows.map((row, index) => {
                 if (row.kind !== 'task') return null;
                 const task = row.task;
@@ -1078,18 +1078,39 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                   .map((r, ri) => r.kind === 'task' && task.children.includes(r.task.id) ? ri : -1)
                   .filter((ri) => ri >= 0);
                 if (childIndices.length === 0) return null;
-                const firstChildIdx = childIndices[0];
-                const lastChildIdx = childIndices[childIndices.length - 1];
-                const firstChild = rows[firstChildIdx] as { kind: 'task'; task: Task; depth: number };
-                const lastChild = rows[lastChildIdx] as { kind: 'task'; task: Task; depth: number };
-                const bgX = dateToDayOffset(firstChild.task.startDate, state.timelineStartDate) * dayWidth;
-                const bgW = dateToDayOffset(lastChild.task.endDate, state.timelineStartDate) * dayWidth - bgX;
-                const bgY = index * ROW_HEIGHT + ROW_HEIGHT;
-                const bgH = (lastChildIdx - index) * ROW_HEIGHT;
-                return (
-                  <rect key={`subtask-bg-${index}`} x={bgX} y={bgY} width={bgW} height={bgH}
-                    rx={4} fill={theme.text400} opacity={0.18} style={{ pointerEvents: 'none' }} />
-                );
+
+                // Split child indices into contiguous segments (break at group headers)
+                const segments: number[][] = [];
+                let currentSegment: number[] = [];
+                for (const ci of childIndices) {
+                  if (currentSegment.length > 0) {
+                    const prev = currentSegment[currentSegment.length - 1];
+                    const hasGroupBetween = rows.slice(prev + 1, ci).some((r) => r.kind === 'group');
+                    if (hasGroupBetween) {
+                      segments.push(currentSegment);
+                      currentSegment = [];
+                    }
+                  }
+                  currentSegment.push(ci);
+                }
+                if (currentSegment.length > 0) segments.push(currentSegment);
+
+                return segments.map((seg, si) => {
+                  const firstIdx = seg[0];
+                  const lastIdx = seg[seg.length - 1];
+                  const first = rows[firstIdx] as { kind: 'task'; task: Task; depth: number };
+                  const last = rows[lastIdx] as { kind: 'task'; task: Task; depth: number };
+                  const bgX = dateToDayOffset(first.task.startDate, state.timelineStartDate) * dayWidth;
+                  const bgW = dateToDayOffset(last.task.endDate, state.timelineStartDate) * dayWidth - bgX;
+                  // Find the parent row index for this segment (row just before firstIdx that is the parent or group)
+                  const parentRowIdx = firstIdx - 1;
+                  const bgY = parentRowIdx >= index ? parentRowIdx * ROW_HEIGHT + ROW_HEIGHT : firstIdx * ROW_HEIGHT;
+                  const bgH = (lastIdx - firstIdx + 1) * ROW_HEIGHT;
+                  return (
+                    <rect key={`subtask-bg-${index}-${si}`} x={bgX} y={bgY} width={bgW} height={bgH}
+                      rx={4} fill={theme.text400} opacity={0.08} style={{ pointerEvents: 'none' }} />
+                  );
+                });
               })}
 
               {/* Task bars */}
@@ -1104,7 +1125,6 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 const hasChildren = task.children.length > 0;
                 const isLeafChild = !hasChildren && depth > 0;
 
-                // Leaf children get slightly thinner bars
                 const y = isLeafChild ? index * ROW_HEIGHT + 10 : index * ROW_HEIGHT + 8;
                 const barHeight = isLeafChild ? ROW_HEIGHT - 20 : ROW_HEIGHT - 16;
 
@@ -1112,25 +1132,80 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 const status = getTaskStatus(task, state.tasks);
                 const statusColor = getStatusColor(status);
 
+                const hasActual = task.actualStartDate || task.actualEndDate;
+
                 return (
                   <g key={`bar-${index}`}>
-                    <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
-                      fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
-                      stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
-                      style={{ cursor: readOnly ? 'pointer' : 'grab' }}
-                      onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
-                      onMouseDown={(e) => {
-                        if (readOnly) return;
-                        e.preventDefault();
-                        setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
-                      }}
-                      onMouseEnter={(e) => { if (width <= 60) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
-                      onMouseMove={(e) => { if (width <= 60 && tooltip) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
-                      onMouseLeave={() => setTooltip(null)}
-                    />
-                    <rect x={x} y={y} width={Math.max(width * (taskProgress / 100), 0)} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                    {hasActual ? (
+                      <>
+                        {/* Planned bar (faded) */}
+                        <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
+                          fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
+                          opacity={0.3}
+                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
+                          style={{ cursor: readOnly ? 'pointer' : 'grab' }}
+                          onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
+                          onMouseDown={(e) => {
+                            if (readOnly) return;
+                            e.preventDefault();
+                            setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
+                          }}
+                          onMouseEnter={(e) => { if (width <= 60) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                          onMouseMove={(e) => { if (width <= 60 && tooltip) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                          onMouseLeave={() => setTooltip(null)}
+                        />
+                        {/* Actual bar */}
+                        {(() => {
+                          const actStartDate = task.actualStartDate || task.startDate;
+                          const actEndDate = task.actualEndDate || task.endDate;
+                          const actStartOffset = dateToDayOffset(actStartDate, state.timelineStartDate);
+                          const actEndOffset = dateToDayOffset(actEndDate, state.timelineStartDate);
+                          const actX = actStartOffset * dayWidth;
+                          const plannedEndOffset = dateToDayOffset(task.endDate, state.timelineStartDate);
+
+                          if (actEndOffset <= plannedEndOffset) {
+                            const actWidth = Math.max((actEndOffset - actStartOffset) * dayWidth, 4);
+                            return (
+                              <rect x={actX} y={y} width={actWidth} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
+                                fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                            );
+                          } else {
+                            const onTimeWidth = Math.max((plannedEndOffset - actStartOffset) * dayWidth, 0);
+                            const delayX = plannedEndOffset * dayWidth;
+                            const delayWidth = (actEndOffset - plannedEndOffset) * dayWidth;
+                            return (
+                              <>
+                                {onTimeWidth > 0 && (
+                                  <rect x={actX} y={y} width={onTimeWidth} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
+                                    fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                                )}
+                                <rect x={delayX} y={y} width={delayWidth} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
+                                  fill={theme.danger + '90'} style={{ pointerEvents: 'none' }} />
+                              </>
+                            );
+                          }
+                        })()}
+                      </>
+                    ) : (
+                      <>
+                        <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
+                          fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
+                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
+                          style={{ cursor: readOnly ? 'pointer' : 'grab' }}
+                          onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
+                          onMouseDown={(e) => {
+                            if (readOnly) return;
+                            e.preventDefault();
+                            setDragTask({ id: task.id, type: 'move', startX: e.clientX, origStart: task.startDate, origEnd: task.endDate });
+                          }}
+                          onMouseEnter={(e) => { if (width <= 60) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                          onMouseMove={(e) => { if (width <= 60 && tooltip) setTooltip({ text: task.title, x: e.clientX, y: e.clientY }); }}
+                          onMouseLeave={() => setTooltip(null)}
+                        />
+                        <rect x={x} y={y} width={Math.max(width * (taskProgress / 100), 0)} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6} fill={statusColor} opacity={0.7} style={{ pointerEvents: 'none' }} />
+                      </>
+                    )}
                     {hasChildren && (() => {
-                      // Find first and last child task rows
                       const childIndices = rows
                         .map((r, ri) => r.kind === 'task' && task.children.includes(r.task.id) ? ri : -1)
                         .filter((ri) => ri >= 0);
@@ -1156,7 +1231,10 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       );
                     })()}
                     {(() => {
-                      const visibleX = Math.max(x, 0);
+                      const textLeftX = hasActual
+                        ? Math.min(x, dateToDayOffset(task.actualStartDate || task.startDate, state.timelineStartDate) * dayWidth)
+                        : x;
+                      const visibleX = Math.max(textLeftX, 0);
                       const visibleWidth = width - (visibleX - x);
                       if (visibleWidth <= 60) return null;
                       const textX = visibleX + 8;
