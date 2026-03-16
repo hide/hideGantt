@@ -1155,11 +1155,18 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                         </>
                       );
                     })()}
-                    {width > 60 && (
-                      <text x={x + 8} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 10 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
-                        {task.title.length > Math.floor(width / 7) ? task.title.slice(0, Math.floor(width / 7)) + '…' : task.title}
-                      </text>
-                    )}
+                    {(() => {
+                      const visibleX = Math.max(x, 0);
+                      const visibleWidth = width - (visibleX - x);
+                      if (visibleWidth <= 60) return null;
+                      const textX = visibleX + 8;
+                      const maxChars = Math.floor(visibleWidth / 7);
+                      return (
+                        <text x={textX} y={y + barHeight / 2 + 4} fill={theme.text100} fontSize={isLeafChild ? 10 : 11} fontWeight={isLeafChild ? 400 : 500} style={{ pointerEvents: 'none' }}>
+                          {task.title.length > maxChars ? task.title.slice(0, maxChars) + '…' : task.title}
+                        </text>
+                      );
+                    })()}
                     {taskProgress >= 100 && width > 10 && (
                       <line x1={x - 4} y1={y + barHeight / 2} x2={x + width + 4} y2={y + barHeight / 2}
                         stroke={theme.text100} strokeWidth={1.5} opacity={0.5} style={{ pointerEvents: 'none' }} />
