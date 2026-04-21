@@ -23,6 +23,9 @@ const HEADER_HEIGHT = 60;
 const TASK_LIST_DEFAULT_WIDTH = 320;
 const TASK_LIST_MIN_WIDTH = 180;
 const TASK_LIST_MAX_WIDTH = 600;
+const ZOOM_MIN = 0.4;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 1.2;
 
 function dateToDayOffset(date: string, startDate: string): number {
   const d = new Date(date);
@@ -105,6 +108,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const theme = useTheme();
   const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const taskListScrollRef = useRef<HTMLDivElement>(null);
+  const [zoomScale, setZoomScale] = useState(1);
   const [dragTask, setDragTask] = useState<{ id: string; type: 'move' | 'resize-end'; startX: number; origStart: string; origEnd: string } | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [addingSubtaskFor, setAddingSubtaskFor] = useState<string | null>(null);
@@ -136,6 +141,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   const pickColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
   const sectionKeys: SidebarSection[] = ['projects', 'people', 'categories', 'milestones'];
+  const sectionIcons: Record<SidebarSection, string> = { projects: '📁', people: '👤', categories: '🏷️', milestones: '🚩' };
   const sectionLabelKeys: Record<SidebarSection, string> = { projects: 'section.projects', people: 'section.people', categories: 'section.categories', milestones: 'section.milestones' };
   const addPlaceholderKeys: Record<SidebarSection, string> = { projects: 'add.project', people: 'add.person', categories: 'add.category', milestones: 'add.milestone' };
 
@@ -305,33 +311,30 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
     return { listRows, rows: chartRows, allTasks: filteredTasks };
   }, [state, sidebarSection, t]);
 
-  // Track container size for auto-fit (skip updates while resizing task list)
+  // Track container width (used as min chart width)
   const [containerWidth, setContainerWidth] = useState(800);
-  const [containerHeight, setContainerHeight] = useState(600);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       if (resizingTaskListRef.current) return;
-      for (const entry of entries) {
+      for (const entry of entries)
         setContainerWidth(entry.contentRect.width);
-        setContainerHeight(entry.contentRect.height);
-      }
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
   const totalDays = Math.max(1, dateToDayOffset(state.timelineEndDate, state.timelineStartDate));
-  // Fixed dayWidth based on zoom level; content may exceed container → horizontal scroll
+  // Fixed dayWidth based on zoom level scaled by user zoom; content may exceed container → horizontal scroll
   const baseDayWidth = state.zoomLevel === 'day' ? 40 : state.zoomLevel === 'week' ? 16 : 5;
   const { dayWidth, chartWidth, autoZoom, headers } = useMemo(() => {
-    const dw = Math.max(baseDayWidth, containerWidth / totalDays);
+    const dw = baseDayWidth * zoomScale;
     const cw = Math.max(containerWidth, totalDays * dw);
     const az: 'day' | 'week' | 'month' = dw >= 25 ? 'day' : dw >= 8 ? 'week' : 'month';
     const hd = generateDateHeaders(state.timelineStartDate, state.timelineEndDate, az, dw);
     return { dayWidth: dw, chartWidth: cw, autoZoom: az, headers: hd };
-  }, [containerWidth, totalDays, baseDayWidth, state.timelineStartDate, state.timelineEndDate]);
+  }, [containerWidth, totalDays, baseDayWidth, zoomScale, state.timelineStartDate, state.timelineEndDate]);
   const milestones = Object.values(state.milestones);
   const todayOffset = dateToDayOffset(new Date().toISOString().split('T')[0], state.timelineStartDate);
 
@@ -358,11 +361,8 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   }, [milestones, state.timelineStartDate, dayWidth]);
   const milestoneAreaHeight = milestoneRowCount > 0 ? milestoneRowCount * MILESTONE_ROW_HEIGHT + 16 : 0;
 
-  // Dynamic ROW_HEIGHT: fit all rows vertically within container
-  const availableHeight = containerHeight - HEADER_HEIGHT - milestoneAreaHeight;
-  const ROW_HEIGHT = rows.length > 0
-    ? Math.max(ROW_HEIGHT_MIN, Math.min(ROW_HEIGHT_DEFAULT, Math.floor(availableHeight / rows.length)))
-    : ROW_HEIGHT_DEFAULT;
+  // Fixed ROW_HEIGHT (zoom affects only horizontal/time axis); content may exceed container → vertical scroll
+  const ROW_HEIGHT = ROW_HEIGHT_DEFAULT;
 
 
   const handleMouseMove = useCallback(
@@ -387,6 +387,51 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
   );
 
   const handleMouseUp = useCallback(() => { setDragTask(null); setDragReorder(null); }, []);
+
+  const zoomIn = useCallback(() => setZoomScale((z) => Math.min(ZOOM_MAX, +(z * ZOOM_STEP).toFixed(3))), []);
+  const zoomOut = useCallback(() => setZoomScale((z) => Math.max(ZOOM_MIN, +(z / ZOOM_STEP).toFixed(3))), []);
+
+  // Scroll selected task into view (both task list and chart)
+  const selectedTaskId = state.selectedTaskId;
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    const task = state.tasks[selectedTaskId];
+    if (!task) return;
+    const VPAD = 40;
+    const HPAD = 80;
+
+    // Chart: vertical + horizontal
+    const chartIdx = rows.findIndex((r) => r.kind === 'task' && r.task.id === selectedTaskId);
+    if (chartIdx >= 0 && scrollRef.current) {
+      const el = scrollRef.current;
+      const rowY = HEADER_HEIGHT + chartIdx * ROW_HEIGHT;
+      const viewH = el.clientHeight;
+      if (rowY < el.scrollTop + HEADER_HEIGHT)
+        el.scrollTop = Math.max(0, rowY - HEADER_HEIGHT - VPAD);
+      else if (rowY + ROW_HEIGHT > el.scrollTop + viewH)
+        el.scrollTop = rowY + ROW_HEIGHT - viewH + VPAD;
+      const startX = dateToDayOffset(task.startDate, state.timelineStartDate) * dayWidth;
+      const endX = dateToDayOffset(task.endDate, state.timelineStartDate) * dayWidth;
+      const viewW = el.clientWidth;
+      if (startX < el.scrollLeft)
+        el.scrollLeft = Math.max(0, startX - HPAD);
+      else if (endX > el.scrollLeft + viewW)
+        el.scrollLeft = Math.max(0, endX - viewW + HPAD);
+    }
+
+    // Task list: vertical
+    const listIdx = listRows.findIndex((r) => r.kind === 'task' && r.task.id === selectedTaskId);
+    if (listIdx >= 0 && taskListScrollRef.current) {
+      const el = taskListScrollRef.current;
+      const rowY = listIdx * ROW_HEIGHT;
+      const viewH = el.clientHeight;
+      if (rowY < el.scrollTop)
+        el.scrollTop = Math.max(0, rowY - VPAD);
+      else if (rowY + ROW_HEIGHT > el.scrollTop + viewH)
+        el.scrollTop = rowY + ROW_HEIGHT - viewH + VPAD;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTaskId]);
 
   useEffect(() => {
     if (dragTask || dragReorder) {
@@ -591,7 +636,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
               style={{ color: theme.text300 }}
               onClick={() => setSectionMenuOpen(!sectionMenuOpen)}
             >
-              <span>{t(sectionLabelKeys[sidebarSection] as any)}</span>
+              <span>{sectionIcons[sidebarSection]} {t(sectionLabelKeys[sidebarSection] as any)}</span>
               <span className="text-[10px]">▼</span>
             </button>
             {sectionMenuOpen && (
@@ -607,7 +652,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     style={{ color: theme.text200 }}
                   >
                     {sidebarSection === key && <span className="text-[10px]" style={{ color: theme.accent }}>✓</span>}
-                    <span className={sidebarSection === key ? '' : 'ml-4'}>{t(sectionLabelKeys[key] as any)}</span>
+                    <span className={sidebarSection === key ? '' : 'ml-4'}>{sectionIcons[key]} {t(sectionLabelKeys[key] as any)}</span>
                   </button>
                 ))}
               </div>
@@ -615,7 +660,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
           </div>
 
           {/* Task rows */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div ref={taskListScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
             {listRows.map((row, index) => {
               if (row.kind === 'group') {
                 const isUncategorized = row.id === '__uncategorized';
@@ -709,6 +754,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
               const isDraggingTask = dragReorder?.taskId === task.id;
               const isTaskDropTarget = dropTargetTaskId === task.id && dragReorder?.taskId !== task.id;
 
+              const isSelected = state.selectedTaskId === task.id;
               return (
                 <div
                   key={`task-${index}`}
@@ -718,7 +764,9 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                     paddingLeft: 12 + depth * 20,
                     borderBottom: isTaskDropTarget && dropPosition === 'below' ? `2px solid ${theme.accent}` : `1px solid ${theme.bg700}`,
                     borderTop: isTaskDropTarget && dropPosition === 'above' ? `2px solid ${theme.accent}` : '2px solid transparent',
-                    background: state.selectedTaskId === task.id ? theme.bg700 : undefined,
+                    background: isSelected ? theme.accent + '33' : undefined,
+                    boxShadow: isSelected ? `inset 3px 0 0 ${theme.accent}` : undefined,
+                    fontWeight: isSelected ? 600 : undefined,
                     '--menu-hover': theme.bg600,
                     opacity: isDraggingTask ? 0.4 : 1,
                   } as React.CSSProperties}
@@ -921,29 +969,28 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
             </div>
             <div className="flex items-center gap-0.5" style={{ height: 24 }}>
               <button
-                onClick={() => {
-                  const d = new Date(state.timelineEndDate);
-                  d.setMonth(d.getMonth() - 1);
-                  if (d > new Date(state.timelineStartDate))
-                    setState({ ...state, timelineEndDate: d.toISOString().split('T')[0] });
-                }}
-                className="text-xs px-2 rounded font-bold"
+                onClick={zoomOut}
+                disabled={zoomScale <= ZOOM_MIN + 0.001}
+                className="text-xs px-2 rounded font-bold disabled:opacity-40"
                 style={{ background: theme.bg700, color: theme.text300, border: `1px solid ${theme.bg600}`, height: 24 }}
-                title="End date −1 month"
+                title="Zoom out"
               >−</button>
               <button
-                onClick={() => {
-                  const d = new Date(state.timelineEndDate);
-                  d.setMonth(d.getMonth() + 1);
-                  setState({ ...state, timelineEndDate: d.toISOString().split('T')[0] });
-                }}
-                className="text-xs px-2 rounded font-bold"
+                onClick={() => setZoomScale(1)}
+                className="text-[10px] px-1.5 rounded tabular-nums"
+                style={{ background: theme.bg700, color: theme.text400, border: `1px solid ${theme.bg600}`, height: 24, minWidth: 44 }}
+                title="Reset zoom"
+              >{Math.round(zoomScale * 100)}%</button>
+              <button
+                onClick={zoomIn}
+                disabled={zoomScale >= ZOOM_MAX - 0.001}
+                className="text-xs px-2 rounded font-bold disabled:opacity-40"
                 style={{ background: theme.bg700, color: theme.text300, border: `1px solid ${theme.bg600}`, height: 24 }}
-                title="End date +1 month"
+                title="Zoom in"
               >+</button>
             </div>
           </div>
-          <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden">
+          <div ref={scrollRef} className="flex-1 overflow-auto">
           <div style={{ width: chartWidth, minHeight: HEADER_HEIGHT + rows.length * ROW_HEIGHT + milestoneAreaHeight }}>
             {/* Header */}
             <div className="sticky top-0 z-10" style={{ height: HEADER_HEIGHT, background: theme.bg800, borderBottom: `1px solid ${theme.bg600}` }}>
@@ -987,6 +1034,14 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                 row.kind !== 'group' ? (
                   <rect key={`row-${i}`} x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
                     fill={i % 2 === 0 ? 'transparent' : theme.rowAlt} />
+                ) : null
+              ))}
+
+              {/* Selected row highlight */}
+              {rows.map((row, i) => (
+                row.kind === 'task' && state.selectedTaskId === row.task.id ? (
+                  <rect key={`sel-${i}`} x={0} y={i * ROW_HEIGHT} width="100%" height={ROW_HEIGHT}
+                    fill={theme.accent} opacity={0.12} style={{ pointerEvents: 'none' }} />
                 ) : null
               ))}
 
@@ -1176,7 +1231,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                         <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
                           fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
                           opacity={0.3}
-                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
+                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={state.selectedTaskId === task.id ? 3 : 1.5}
                           style={{ cursor: readOnly ? 'pointer' : 'grab' }}
                           onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
                           onMouseDown={(e) => {
@@ -1224,7 +1279,7 @@ export function GanttChart({ state, setState, readOnly }: GanttChartProps) {
                       <>
                         <rect x={x} y={y} width={width} height={barHeight} rx={hasChildren ? 6 : isLeafChild ? 4 : 6}
                           fill={hasChildren ? theme.barParentBg : isLeafChild ? (statusColor + '40') : theme.barBg}
-                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={1.5}
+                          stroke={state.selectedTaskId === task.id ? theme.accent : 'transparent'} strokeWidth={state.selectedTaskId === task.id ? 3 : 1.5}
                           style={{ cursor: readOnly ? 'pointer' : 'grab' }}
                           onClick={() => setState({ ...state, selectedTaskId: task.id, editingItemId: null, editingItemType: null })}
                           onMouseDown={(e) => {
